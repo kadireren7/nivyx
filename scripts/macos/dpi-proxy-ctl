@@ -1,10 +1,11 @@
 #!/bin/sh
 #
-# Compatibility alias for dpictl (the primary CLI as of v2.0). Existing
-# scripts that call dpi-proxy-ctl keep working unchanged: every
-# argument is passed straight through, with the same exit status.
+# Compatibility alias for nivyx (the primary CLI as of v2.1; dpictl is
+# also kept as an alias). Existing scripts that call dpi-proxy-ctl keep
+# working unchanged: every argument is passed straight through, with
+# the same exit status.
 #
-# See scripts/macos/dpictl for the actual implementation.
+# See scripts/macos/dpictl (== scripts/macos/nivyx) for the actual implementation.
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 

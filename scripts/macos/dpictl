@@ -1,16 +1,19 @@
 #!/bin/sh
 #
-# dpictl for macOS: the same commands as on Linux and Windows, around
+# nivyx for macOS: the same commands as on Linux and Windows, around
 # launchd (the service), the daemon's status file and log, and pfctl
-# (only our own anchor is ever looked at).
+# (only our own anchor is ever looked at). This one file is the whole
+# implementation: `dpictl` and `dpi-proxy-ctl` are compatibility
+# aliases for it (scripts/macos/nivyx is a symlink to this file).
+# Internal identifiers (the launchd label, PF anchor, /usr/local/bin/
+# dpi-proxy, ...) are kept unchanged from pre-rebrand installs — only
+# user-facing output and command names change here.
 #
-#   dpictl status [--verbose] | start | stop | restart | reload
-#   dpictl logs [N] | strategy HOST | diagnose HOST
-#   dpictl doctor | support-bundle [FILE] | version
+#   nivyx status [--verbose] | start | stop | restart | reload
+#   nivyx logs [N] | strategy HOST | diagnose HOST
+#   nivyx doctor | support-bundle [FILE] | version
 #
 # start/stop/restart/reload need sudo; the rest works as any user.
-#
-# dpi-proxy-ctl is kept as a compatibility alias for this script.
 
 LABEL="io.github.kadireren7.dpi-proxy"
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
@@ -22,11 +25,25 @@ DECISIONS="${DPI_PROXY_TP_DECISIONS:-/usr/local/var/dpi-proxy/tp-decisions.conf}
 STRATEGY_CONF="${DPI_PROXY_STRATEGY_CONF:-/usr/local/etc/dpi-proxy/strategy.conf}"
 BIN="/usr/local/bin/dpi-proxy"
 
-err() { printf 'dpictl: %s\n' "$1" >&2; }
+# The name the user actually typed (nivyx / dpictl / dpi-proxy-ctl).
+SELF="$(basename "$0")"
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+	C_GREEN="$(printf '\033[32m')"
+	C_YELLOW="$(printf '\033[33m')"
+	C_RED="$(printf '\033[31m')"
+	C_CYAN="$(printf '\033[36m')"
+	C_DIM="$(printf '\033[2m')"
+	C_RESET="$(printf '\033[0m')"
+else
+	C_GREEN=""; C_YELLOW=""; C_RED=""; C_CYAN=""; C_DIM=""; C_RESET=""
+fi
+
+err() { printf '%s: %s\n' "$SELF" "$1" >&2; }
 
 need_root() {
 	if [ "$(id -u)" -ne 0 ]; then
-		err "\"$1\" needs administrator rights: sudo dpictl $1"
+		err "\"$1\" needs administrator rights: sudo $SELF $1"
 		exit 1
 	fi
 }
@@ -55,12 +72,12 @@ service_state() {
 
 status_short() {
 	ver="$(version_string)"
-	echo "dpi-for-everyone ${ver:-'(version unknown - dpi-proxy not found)'}"
+	echo "${C_CYAN}Nivyx ${ver:-'(version unknown - dpi-proxy not found)'}${C_RESET}"
 	st="$(service_state)"
 	case "$st" in
-	running*) echo "Service: Running" ;;
-	loaded) echo "Service: Stopped"; echo "Protection: Inactive"; echo "DNS: N/A"; echo "Mode: N/A"; echo "Bypassed: 0"; echo "Failures: 0"; return 0 ;;
-	*) echo "Service: Stopped"; echo "Protection: Inactive"; echo "DNS: N/A"; echo "Mode: N/A"; echo "Bypassed: 0"; echo "Failures: 0"; return 0 ;;
+	running*) echo "Service: ${C_GREEN}Running${C_RESET}" ;;
+	loaded) echo "Service: ${C_YELLOW}Stopped${C_RESET}"; echo "Protection: ${C_DIM}Inactive${C_RESET}"; echo "DNS: N/A"; echo "Mode: N/A"; echo "Bypassed: 0"; echo "Failures: 0"; return 0 ;;
+	*) echo "Service: ${C_YELLOW}Stopped${C_RESET}"; echo "Protection: ${C_DIM}Inactive${C_RESET}"; echo "DNS: N/A"; echo "Mode: N/A"; echo "Bypassed: 0"; echo "Failures: 0"; return 0 ;;
 	esac
 	if [ ! -r "$STATUS_FILE" ] || [ "$(field pid)" != "${st#running }" ]; then
 		echo "Protection: Starting"
@@ -71,20 +88,20 @@ status_short() {
 		return 0
 	fi
 	if [ "$(field engine)" = running ] && [ "$(field pf)" = enabled ]; then
-		echo "Protection: Active"
+		echo "Protection: ${C_GREEN}Active${C_RESET}"
 	elif [ "$(field engine)" = running ]; then
-		echo "Protection: Degraded ($(field pf))"
+		echo "Protection: ${C_YELLOW}Degraded ($(field pf))${C_RESET}"
 	else
-		echo "Protection: Starting"
+		echo "Protection: ${C_YELLOW}Starting${C_RESET}"
 	fi
 	fails="$(field dns_failures)"
 	case "$(field dns_intercept)" in
 	doh)
-		if [ -z "$fails" ] || [ "$fails" = 0 ]; then echo "DNS: Healthy"
-		else echo "DNS: Degraded ($fails failure(s))"; fi
+		if [ -z "$fails" ] || [ "$fails" = 0 ]; then echo "DNS: ${C_GREEN}Healthy${C_RESET}"
+		else echo "DNS: ${C_YELLOW}Degraded ($fails failure(s))${C_RESET}"; fi
 		;;
-	off) echo "DNS: Not intercepted" ;;
-	*) echo "DNS: Unknown" ;;
+	off) echo "DNS: ${C_DIM}Not intercepted${C_RESET}" ;;
+	*) echo "DNS: ${C_YELLOW}Unknown${C_RESET}" ;;
 	esac
 	mode="$(field mode)"
 	echo "Mode: $(printf '%s' "$mode" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
@@ -165,7 +182,7 @@ do_start() {
 	*) launchctl kickstart "system/$LABEL" || exit 1 ;;
 	esac
 	if wait_running; then status_verbose; else
-		err "the service did not come up; see: dpictl logs"
+		err "the service did not come up; see: $SELF logs"
 		exit 1
 	fi
 }
@@ -191,7 +208,7 @@ do_restart() {
 		launchctl kickstart -k "system/$LABEL" || exit 1
 		sleep 1
 		if wait_running; then status_verbose; else
-			err "the service did not come up; see: dpictl logs"
+			err "the service did not come up; see: $SELF logs"
 			exit 1
 		fi
 		;;
@@ -267,9 +284,11 @@ diagnose() {
 
 DOCTOR_FAILED=0
 check() {
-	level="$1"; msg="$2"
-	[ "$level" = FAIL ] && DOCTOR_FAILED=1
-	printf '[%-4s] %s\n' "$level" "$msg"
+	level="$1"; msg="$2"; color="$C_RESET"
+	[ "$level" = FAIL ] && { DOCTOR_FAILED=1; color="$C_RED"; }
+	[ "$level" = WARN ] && color="$C_YELLOW"
+	[ "$level" = PASS ] && color="$C_GREEN"
+	printf '%s[%-4s]%s %s\n' "$color" "$level" "$C_RESET" "$msg"
 }
 
 doctor_permissions() {
@@ -372,7 +391,7 @@ doctor_vpn() {
 
 doctor_stale() {
 	if [ "$(id -u)" -ne 0 ]; then
-		check WARN "stale rules: cannot check without root (run: sudo dpictl doctor)"
+		check WARN "stale rules: cannot check without root (run: sudo $SELF doctor)"
 		return
 	fi
 	case "$(service_state)" in
@@ -389,7 +408,7 @@ doctor_stale() {
 }
 
 doctor() {
-	echo "dpictl doctor — $(date -u +%FT%TZ)"
+	echo "$SELF doctor — $(date -u +%FT%TZ)"
 	echo
 	doctor_permissions
 	doctor_service
@@ -423,10 +442,10 @@ redact() {
 support_bundle() {
 	ts="$(date -u +%Y%m%dT%H%M%SZ)"
 	outdir="$(mktemp -d)"
-	out="${1:-./dpictl-support-$ts.tar.gz}"
+	out="${1:-./nivyx-support-$ts.tar.gz}"
 
 	{
-		echo "dpictl support-bundle"
+		echo "$SELF support-bundle"
 		echo "generated: $ts (UTC)"
 		echo "version:   $(version_string)"
 		echo "binary:    $BIN"
@@ -463,8 +482,10 @@ support_bundle() {
 }
 
 usage() {
-	cat <<'EOF'
-Usage: dpictl <command> [args]
+	cat <<EOF
+Nivyx — lightweight system-wide DPI bypass
+
+Usage: $SELF <command> [args]
 
   status [--verbose]   engine, DNS, counters, PF state
   start | stop | restart | reload     (need sudo)
@@ -473,10 +494,11 @@ Usage: dpictl <command> [args]
   diagnose HOST        read-only look at DNS/HTTPS for HOST
   doctor               health checks (service/DNS/interception/conflicts)
   support-bundle [FILE] local diagnostics archive (no telemetry)
-  version              print the dpi-proxy version and exit
+  version              print the Nivyx version and exit
 
 Uninstall: sudo ./uninstall.sh (in the extracted package folder).
-dpi-proxy-ctl is a compatibility alias for this command.
+nivyx is the primary command; dpictl and dpi-proxy-ctl remain
+compatibility aliases for it (same implementation, no behavior change).
 EOF
 }
 
@@ -497,18 +519,18 @@ restart) do_restart ;;
 reload) do_reload ;;
 logs) do_logs "${1:-100}" ;;
 strategy)
-	[ $# -ge 1 ] || { err "strategy needs a host, e.g. dpictl strategy discord.com"; exit 1; }
+	[ $# -ge 1 ] || { err "strategy needs a host, e.g. $SELF strategy discord.com"; exit 1; }
 	show_strategy "$1"
 	;;
 diagnose)
-	[ $# -ge 1 ] || { err "diagnose needs a host, e.g. dpictl diagnose discord.com"; exit 1; }
+	[ $# -ge 1 ] || { err "diagnose needs a host, e.g. $SELF diagnose discord.com"; exit 1; }
 	diagnose "$1"
 	;;
 doctor) doctor ;;
 support-bundle) support_bundle "${1:-}" ;;
 version)
 	ver="$(version_string)"
-	echo "dpi-for-everyone ${ver:-'(version unknown - dpi-proxy not found)'}"
+	echo "Nivyx ${ver:-'(version unknown - dpi-proxy not found)'}"
 	;;
 -h | --help | help) usage ;;
 *)

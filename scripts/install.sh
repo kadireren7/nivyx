@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Installs dpi-proxy on Linux: transparent mode as a system service —
+# Installs Nivyx on Linux: transparent mode as a system service —
 # after this, HTTPS from every application goes through the automatic
 # DPI bypass with no proxy settings anywhere. Needs root (sudo).
 #
@@ -23,6 +23,7 @@ PACKET_SERVICE="dpi-proxy-packet"
 TP_TABLE="dpi_proxy_tp"
 BIN_DEST="/usr/local/bin/dpi-proxy"
 PACKET_BIN_DEST="/usr/local/bin/dpi-proxy-packet"
+NIVYX_DEST="/usr/local/bin/nivyx"
 DPICTL_DEST="/usr/local/bin/dpictl"
 CTL_DEST="/usr/local/bin/dpi-proxy-ctl"
 UNIT_DIR="/etc/systemd/system"
@@ -153,6 +154,7 @@ install -m 0755 "$PROJECT_ROOT/dpi-proxy" "$BIN_DEST"
 command -v strip >/dev/null 2>&1 && strip "$BIN_DEST" 2>/dev/null || true
 install -m 0755 "$PROJECT_ROOT/scripts/dpictl" "$DPICTL_DEST"
 install -m 0755 "$PROJECT_ROOT/scripts/dpi-proxy-ctl" "$CTL_DEST"
+install -m 0755 "$PROJECT_ROOT/scripts/dpictl" "$NIVYX_DEST"
 if [ "$WITH_PACKET" = 1 ]; then
 	install -m 0755 "$PROJECT_ROOT/dpi-proxy-packet" "$PACKET_BIN_DEST"
 fi
@@ -230,10 +232,10 @@ if [ "$OTHER_ACTIVE" = 1 ]; then
 	echo "  two will interfere."
 fi
 echo
-echo "  Status:     dpictl status               (sudo for interception counters)"
-echo "  Doctor:     dpictl doctor                (health checks)"
-echo "  Logs:       dpictl logs"
-echo "  Stop:       sudo dpictl stop             (internet keeps working, unbypassed)"
+echo "  Status:     nivyx status               (sudo for interception counters)"
+echo "  Doctor:     nivyx doctor                (health checks)"
+echo "  Logs:       nivyx logs"
+echo "  Stop:       sudo nivyx stop             (internet keeps working, unbypassed)"
 echo "  Uninstall:  sudo ./scripts/uninstall.sh"
 echo "  Config:     $CONF_DEST (optional manual rules)"
-echo "  (dpi-proxy-ctl still works as an alias for dpictl)"
+echo "  (dpictl and dpi-proxy-ctl still work as aliases for nivyx)"

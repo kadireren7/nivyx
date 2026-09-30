@@ -159,6 +159,21 @@ if ((Test-Path $dnsSummary) -and -not (Select-String -Path $dnsSummary -SimpleMa
 Remove-Item $bundle, $bdir -Recurse -Force -ErrorAction SilentlyContinue
 Pass 'support-bundle archive redacted correctly'
 
+Step 'nivyx (primary CLI, v2.1+)'
+$nivyx = Join-Path $InstDir 'nivyx.cmd'
+$out = (& powershell -NoProfile -ExecutionPolicy Restricted -Command 'nivyx status' 2>&1 | Out-String)
+Write-Host $out
+if ($LASTEXITCODE -ne 0 -or $out -notmatch '^Nivyx ' -or $out -notmatch 'Service: Running') {
+    Die 'nivyx status (by name, Restricted policy) did not report Nivyx/Running'
+}
+$out = (& $nivyx --help 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0 -or $out -notmatch 'nivyx') { Die 'nivyx --help failed' }
+$env:NO_COLOR = '1'
+$out = (& $nivyx status 2>&1 | Out-String)
+Remove-Item Env:\NO_COLOR
+if ($out -match "`e\[") { Die 'NO_COLOR=1 but nivyx emitted a color escape code' }
+Pass 'nivyx status/--help ran; NO_COLOR honored'
+
 Step 'dpi-proxy-ctl (compatibility alias)'
 $ctl = Join-Path $InstDir 'dpi-proxy-ctl.cmd'
 $out = (& powershell -NoProfile -ExecutionPolicy Restricted -Command 'dpi-proxy-ctl status --verbose' 2>&1 | Out-String)

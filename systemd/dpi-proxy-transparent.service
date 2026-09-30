@@ -1,6 +1,6 @@
 [Unit]
 Description=dpi-proxy transparent mode (automatic DPI bypass for outgoing HTTPS and DNS, Linux)
-Documentation=https://github.com/kadireren7/dpi-for-everyone
+Documentation=https://github.com/kadireren7/nivyx
 # Needs no network at start (resolvers are only asked lazily); the
 # nftables ordering keeps a boot-time `nft -f /etc/nftables.conf`
 # (which may flush the ruleset) from running after us.
