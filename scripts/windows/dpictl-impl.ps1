@@ -347,6 +347,20 @@ function Invoke-SupportBundle([string]$OutFile) {
     Write-Host 'Review it before sharing - it may still contain domain names you visited and log timestamps.'
 }
 
+# nivyx.cmd/dpictl.cmd set DPICTL_HELP=1 when they see --help/-h among
+# the raw arguments (PowerShell's own -File argument binder cannot be
+# trusted to hand a bare "--help" token to $Command intact — the same
+# class of bug documented below for --verbose). Checked before the
+# switch so it always wins, regardless of what $Command ended up as.
+if ($env:DPICTL_HELP -eq '1' -or $Command -in '--help', '-h', 'help') {
+    Write-Host 'Nivyx -- lightweight system-wide DPI bypass'
+    Write-Host ''
+    Write-Host 'Usage: nivyx status [--verbose] | start | stop | restart | logs [N] | diagnose HOST | doctor | support-bundle [FILE] | version'
+    Write-Host ''
+    Write-Host 'nivyx is the primary command; dpictl and dpi-proxy-ctl remain compatibility aliases for it.'
+    exit 0
+}
+
 switch ($Command) {
     'status' {
         # dpictl.cmd sets DPICTL_VERBOSE=1 when it sees --verbose/-v
@@ -369,14 +383,6 @@ switch ($Command) {
     'version'        {
         $ver = Get-VersionString
         if ($ver) { Write-Host "Nivyx $ver" } else { Write-Host 'Nivyx (version unknown - dpi-proxy.exe not found)' }
-    }
-    { $_ -in '--help', '-h', 'help', '' } {
-        Write-Host 'Nivyx -- lightweight system-wide DPI bypass'
-        Write-Host ''
-        Write-Host 'Usage: nivyx status [--verbose] | start | stop | restart | logs [N] | diagnose HOST | doctor | support-bundle [FILE] | version'
-        Write-Host ''
-        Write-Host 'nivyx is the primary command; dpictl and dpi-proxy-ctl remain compatibility aliases for it.'
-        exit 0
     }
     default    {
         Write-Host "Nivyx: unknown command '$Command' (see: nivyx --help)"

@@ -167,6 +167,7 @@ if ($LASTEXITCODE -ne 0 -or $out -notmatch '^Nivyx ' -or $out -notmatch 'Service
     Die 'nivyx status (by name, Restricted policy) did not report Nivyx/Running'
 }
 $out = (& $nivyx --help 2>&1 | Out-String)
+Write-Host $out
 if ($LASTEXITCODE -ne 0 -or $out -notmatch 'nivyx') { Die 'nivyx --help failed' }
 $env:NO_COLOR = '1'
 $out = (& $nivyx status 2>&1 | Out-String)
