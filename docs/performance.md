@@ -67,7 +67,7 @@ other installed files.
 |---|---|
 | `dpi-proxy.exe` (our executable, stripped) | 6,018,560 B |
 | `WinDivert.dll` + `WinDivert64.sys` (third-party driver, unmodified) | ~142 KB |
-| Scripts (`install.ps1`, `uninstall.ps1`, `Install.cmd`, `Uninstall.cmd`, `dpictl.cmd`, `dpi-proxy-ctl.cmd`, `dpictl-impl.ps1`) | ~26 KB |
+| Scripts (`install.ps1`, `uninstall.ps1`, `Install Nivyx.cmd`, `Uninstall Nivyx.cmd`, `nivyx.cmd`, `dpictl.cmd`, `dpi-proxy-ctl.cmd`, `dpictl-impl.ps1`) | ~26 KB |
 | `LICENSE.txt`, `WinDivert-LICENSE.txt`, `WINDOWS-QUICKSTART.txt` | ~3 KB |
 
 Our own executable is over 97% of the package; WinDivert (required for
@@ -78,7 +78,7 @@ transparent mode, never removed) is a small fraction of it.
 | Component | Size (arm64) |
 |---|---|
 | `dpi-proxy` (our executable, stripped, static OpenSSL) | 4,296,184 B |
-| Scripts (`install.sh`, `uninstall.sh`, `Install.command`, `Uninstall.command`, `dpictl`, `dpi-proxy-ctl`) | ~29 KB |
+| Scripts (`install.sh`, `uninstall.sh`, `Install Nivyx.command`, `Uninstall Nivyx.command`, `nivyx`, `dpictl`, `dpi-proxy-ctl`) | ~29 KB |
 | `io.github.kadireren7.dpi-proxy.plist`, `LICENSE`, `MACOS-QUICKSTART.txt` | ~5 KB |
 
 No separate driver/runtime component on macOS (PF is built into the

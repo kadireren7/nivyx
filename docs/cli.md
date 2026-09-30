@@ -1,11 +1,13 @@
-# dpictl — command reference
+# nivyx — command reference
 
-`dpictl` is the control CLI for dpi-proxy's transparent-mode service,
-identical across Linux, Windows and macOS (`dpictl` on Linux/macOS is
-a bash/sh script; on Windows, `dpictl.cmd` runs the equivalent
-PowerShell). `dpi-proxy-ctl` is kept as a compatibility alias — every
-command below works the same way through either name; scripts written
-against `dpi-proxy-ctl` keep working unchanged.
+`nivyx` is the control CLI for Nivyx's transparent-mode service,
+identical across Linux, Windows and macOS (`nivyx` on Linux/macOS is a
+bash/sh script; on Windows, `nivyx.cmd` runs the equivalent
+PowerShell). `dpictl` and `dpi-proxy-ctl` are kept as compatibility
+aliases — every command below works the same way through any of the
+three names; scripts written against `dpictl` or `dpi-proxy-ctl` keep
+working unchanged. All three share one implementation — there is no
+behavior difference between them.
 
 Commands that change service state (`start`/`stop`/`restart`/`reload`)
 need root (`sudo`) on Linux/macOS or an elevated/Administrator terminal
@@ -14,14 +16,14 @@ on Windows. Everything else works as a normal user.
 ## status
 
 ```
-dpictl status              # short summary
-dpictl status --verbose    # full internals (engine, DNS, flows, PF/nft state, ...)
+nivyx status              # short summary
+nivyx status --verbose    # full internals (engine, DNS, flows, PF/nft state, ...)
 ```
 
 The default output is meant to be read at a glance:
 
 ```
-dpi-for-everyone 2.0.0
+Nivyx 2.1.0
 Service: Running
 Protection: Active
 DNS: Healthy
@@ -29,6 +31,10 @@ Mode: Transparent
 Bypassed: 123
 Failures: 0
 ```
+
+Colored on a terminal (green: healthy/running, yellow: warning/
+degraded, red: failed) — plain text when piped/redirected or when
+`NO_COLOR` is set ([no-color.org](https://no-color.org)).
 
 `--verbose` prints the same fields the pre-2.0 default output had:
 engine state, DNS resolver/interception detail, network fingerprint,
@@ -62,8 +68,9 @@ looks wrong with one specific site.
 ## doctor
 
 Read-only health checks, each printed as `[PASS|WARN|FAIL]` with a
-one-line reason. Exits 0 if nothing failed, 1 otherwise. Never modifies
-or disables anything it finds — including other DPI tools.
+one-line reason (colored green/yellow/red on a terminal; see above).
+Exits 0 if nothing failed, 1 otherwise. Never modifies or disables
+anything it finds — including other DPI tools.
 
 Checks: permissions (root/Administrator, binary present), service
 state, interception layer (nftables table / PF anchor / WinDivert
@@ -85,7 +92,7 @@ output, `doctor` output, recent service logs, `strategy.conf`, and
 service state.
 
 **No telemetry**: this command only ever writes a local file; nothing
-is sent anywhere by dpictl itself. Redacted before writing: anything
+is sent anywhere by nivyx itself. Redacted before writing: anything
 that looks like a token/key/secret/password, `$HOME`/`%USERPROFILE%`,
 your username, and the per-domain/per-IP DNS decision history (only a
 count is included, never the raw domain/IP list — that is effectively
@@ -95,11 +102,11 @@ timestamps.
 
 ## version
 
-Prints the installed `dpi-proxy` version and exits.
+Prints the Nivyx version and exits.
 
 ## Packet mode (Linux, optional, advanced)
 
-`dpictl packet <start|stop|restart|reload|status|logs>`,
-`dpictl probe DOMAIN`, `dpictl reprobe DOMAIN`, `dpictl networks` — see
+`nivyx packet <start|stop|restart|reload|status|logs>`,
+`nivyx probe DOMAIN`, `nivyx reprobe DOMAIN`, `nivyx networks` — see
 [packet-mode.md](packet-mode.md). Most installs never need these;
 transparent mode is the default, automatic engine.

@@ -8,8 +8,8 @@ per-network learning. Real ISP/DPI field-tested.
 ## Install
 
 ```sh
-git clone https://github.com/kadireren7/dpi-for-everyone.git
-cd dpi-for-everyone
+git clone https://github.com/kadireren7/nivyx.git
+cd nivyx
 sudo ./scripts/install.sh
 ```
 
@@ -24,25 +24,25 @@ installs; stop one of them, running two at once breaks both.
 ## Commands
 
 ```sh
-dpictl status                # short summary
-dpictl status --verbose      # full detail (nft counters as root)
-dpictl doctor                # health checks, PASS/WARN/FAIL
-dpictl diagnose discord.com  # DNS + HTTPS check for one site
-dpictl logs 50
-dpictl support-bundle        # local diagnostics archive, redacted, no telemetry
-dpictl strategy discord.com  # what applies to a site right now
-sudo dpictl restart
-sudo dpictl stop              # until next start/boot
+nivyx status                # short summary
+nivyx status --verbose      # full detail (nft counters as root)
+nivyx doctor                # health checks, PASS/WARN/FAIL
+nivyx diagnose discord.com  # DNS + HTTPS check for one site
+nivyx logs 50
+nivyx support-bundle        # local diagnostics archive, redacted, no telemetry
+nivyx strategy discord.com  # what applies to a site right now
+sudo nivyx restart
+sudo nivyx stop              # until next start/boot
 ```
 
-`dpi-proxy-ctl` still works with the same commands — a compatibility
-alias for `dpictl`. See [cli.md](cli.md) for the full command
-reference (shared across platforms).
+`dpictl` and `dpi-proxy-ctl` still work with the same commands —
+compatibility aliases for `nivyx`. See [cli.md](cli.md) for the full
+command reference (shared across platforms).
 
 Optional manual rules go in `/etc/dpi-proxy/strategy.conf` (e.g.
 `example.com = tlsrec`); none are needed.
 
-Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/dpictl`,
+Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/nivyx` (+ `dpictl`, `dpi-proxy-ctl` aliases),
 `/etc/dpi-proxy/strategy.conf`, `/var/lib/dpi-proxy/tp-decisions.conf`
 (learned decisions), status file and nftables table `inet
 dpi_proxy_tp`, systemd unit `dpi-proxy-transparent.service`. Logs go
@@ -60,10 +60,10 @@ sudo ./scripts/uninstall.sh --purge     # ...and /etc/dpi-proxy
 ## Troubleshooting
 
 ```sh
-dpictl doctor                    # service/interception/DNS/reachability/conflicts
-dpictl diagnose discord.com      # DNS + HTTPS for one site
-dpictl logs 100
-dpictl support-bundle            # redacted archive to attach to a bug report
+nivyx doctor                    # service/interception/DNS/reachability/conflicts
+nivyx diagnose discord.com      # DNS + HTTPS for one site
+nivyx logs 100
+nivyx support-bundle            # redacted archive to attach to a bug report
 ```
 
 `doctor` also flags other known DPI tools (`dpi-bypass`, zapret's

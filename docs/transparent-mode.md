@@ -3,7 +3,7 @@
 `dpi-proxy --mode transparent`, run by the `dpi-proxy-transparent`
 systemd service on Linux, the `dpi-proxy` service on Windows and the
 `io.github.kadireren7.dpi-proxy` launchd daemon on macOS. It is
-the recommended way to use dpi-for-everyone: after installing, every
+the recommended way to use Nivyx: after installing, every
 application's HTTPS and DNS go through it, with no proxy settings and
 no DNS settings anywhere.
 
@@ -97,12 +97,14 @@ connection.
 ## Operation
 
 ```sh
-dpi-proxy-ctl status          # engine, DNS, counters, conflicts
-dpi-proxy-ctl logs 50
-dpi-proxy-ctl strategy discord.com
-sudo dpi-proxy-ctl restart
-sudo dpi-proxy-ctl stop       # internet keeps working, unbypassed
+nivyx status          # engine, DNS, counters, conflicts
+nivyx logs 50
+nivyx strategy discord.com
+sudo nivyx restart
+sudo nivyx stop       # internet keeps working, unbypassed
 ```
+
+(`dpictl` and `dpi-proxy-ctl` are compatibility aliases for `nivyx`.)
 
 On Linux, logs go to the journal (`journalctl -u dpi-proxy-transparent`);
 `DPI_PROXY_LOG_LEVEL=debug` logs every connection attempt. Learned
