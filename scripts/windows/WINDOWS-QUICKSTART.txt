@@ -1,5 +1,5 @@
-dpi-for-everyone - Windows quick start (Beta)
-=============================================
+Nivyx - Windows quick start (Beta)
+===================================
 
 Windows 10/11, 64-bit. Nothing to build or download besides this ZIP.
 
@@ -9,16 +9,16 @@ BEFORE YOU START
   - Windows Defender or another antivirus may warn about WinDivert.
     WinDivert (WinDivert.dll, WinDivert64.sys) is a signed third-party
     packet interception driver (LGPLv3/GPLv2, see WinDivert-LICENSE.txt),
-    not our code. dpi-proxy uses it only to send this computer's own
+    not our code. Nivyx uses it only to send this computer's own
     HTTPS and DNS traffic through the local dpi-proxy service.
 
 INSTALL (recommended: double-click)
   1. Extract this ZIP to any folder.
-  2. Double-click Install.cmd. A User Account Control prompt appears
-     (choose Yes) - it needs administrator rights to install a system
-     service. The window stays open so you can read the result.
+  2. Double-click "Install Nivyx.cmd". A User Account Control prompt
+     appears (choose Yes) - it needs administrator rights to install a
+     system service. The window stays open so you can read the result.
   3. Check that it is running (any PowerShell window):
-         dpictl status
+         nivyx status
      You should see "Service: Running" and "Protection: Active".
   4. Use Discord, Chrome, Firefox, ... normally. No proxy settings,
      no DNS changes, nothing to configure in any application.
@@ -30,27 +30,27 @@ INSTALL (advanced/manual: PowerShell)
          powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 IF SOMETHING DOES NOT WORK
-         dpictl doctor
-         dpictl diagnose discord.com
-         dpictl logs 50
-         dpictl support-bundle
-  dpictl support-bundle writes a redacted diagnostics .zip you can
+         nivyx doctor
+         nivyx diagnose discord.com
+         nivyx logs 50
+         nivyx support-bundle
+  nivyx support-bundle writes a redacted diagnostics .zip you can
   send to whoever gave you this (no telemetry - it only ever writes a
   local file; nothing is sent anywhere automatically).
 
 EVERYDAY COMMANDS
-         dpictl status
-         dpictl status --verbose
-         dpictl doctor
-         dpictl stop       (Administrator; normal internet, no bypass)
-         dpictl start       (Administrator)
-         dpictl restart     (Administrator)
+         nivyx status
+         nivyx status --verbose
+         nivyx doctor
+         nivyx stop       (Administrator; normal internet, no bypass)
+         nivyx start       (Administrator)
+         nivyx restart     (Administrator)
 
-  dpi-proxy-ctl still works with the same commands (a compatibility
-  alias for dpictl).
+  dpictl and dpi-proxy-ctl still work with the same commands
+  (compatibility aliases for nivyx).
 
 UNINSTALL
-  Double-click Uninstall.cmd (in the install folder, normally
+  Double-click "Uninstall Nivyx.cmd" (in the install folder, normally
   %ProgramFiles%\dpi-proxy), or manually, PowerShell as Administrator:
          powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
   Add -Purge to also delete settings and logs (%ProgramData%\dpi-proxy).
@@ -62,4 +62,4 @@ blocked sites opened normally after a system-wide install, no manual
 proxy or DNS configuration. Not yet validated across a wide range of
 consumer machines and networks. It is not a VPN and never decrypts
 traffic.
-More: https://github.com/kadireren7/dpi-for-everyone
+More: https://github.com/kadireren7/nivyx

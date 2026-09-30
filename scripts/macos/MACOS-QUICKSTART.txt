@@ -1,5 +1,5 @@
-dpi-for-everyone - macOS quick start (Beta)
-===========================================
+Nivyx - macOS quick start (Beta)
+=================================
 
 Built for macOS 11 or newer (tested on macOS 14, 15 and 26). Nothing
 to build or download besides this package: no Xcode, Homebrew, Git or
@@ -13,13 +13,13 @@ BEFORE YOU START
 
 INSTALL (recommended: double-click)
   1. Extract the package (double-click the .zip file).
-  2. Double-click Install.command. It opens in Terminal and asks for
-     your Mac password (sudo) - that is expected, it is installing a
-     system service. If macOS says the file is "from an unidentified
-     developer", right-click (or Control-click) it and choose Open
-     once instead of double-clicking.
+  2. Double-click "Install Nivyx.command". It opens in Terminal and
+     asks for your Mac password (sudo) - that is expected, it is
+     installing a system service. If macOS says the file is "from an
+     unidentified developer", right-click (or Control-click) it and
+     choose Open once instead of double-clicking.
   3. Check: in any Terminal window,
-         dpictl status
+         nivyx status
      You should see "Service: Running" and "Protection: Active".
   4. Open Safari, Chrome, Firefox, Discord, ... normally. No proxy
      settings, no DNS changes, nothing to configure in any app.
@@ -29,27 +29,27 @@ INSTALL (advanced/manual: Terminal)
          sudo ./install.sh
 
 IF SOMETHING FAILS
-         dpictl doctor
-         dpictl diagnose discord.com
-         dpictl logs
-         dpictl support-bundle
-  dpictl support-bundle writes a redacted diagnostics .tar.gz you can
+         nivyx doctor
+         nivyx diagnose discord.com
+         nivyx logs
+         nivyx support-bundle
+  nivyx support-bundle writes a redacted diagnostics .tar.gz you can
   send to whoever gave you this package (no telemetry - it only ever
   writes a local file; nothing is sent anywhere automatically).
 
 EVERYDAY COMMANDS
-         dpictl status
-         dpictl status --verbose
-         dpictl doctor
-         sudo dpictl stop       (normal internet, no bypass)
-         sudo dpictl start
-         sudo dpictl restart
+         nivyx status
+         nivyx status --verbose
+         nivyx doctor
+         sudo nivyx stop       (normal internet, no bypass)
+         sudo nivyx start
+         sudo nivyx restart
 
-  dpi-proxy-ctl still works with the same commands (a compatibility
-  alias for dpictl).
+  dpictl and dpi-proxy-ctl still work with the same commands
+  (compatibility aliases for nivyx).
 
 UNINSTALL
-  Double-click Uninstall.command (in the extracted folder), or
+  Double-click "Uninstall Nivyx.command" (in the extracted folder), or
   manually, in the extracted folder:
          sudo ./uninstall.sh
   Removes everything: the service, the programs, settings, logs and
@@ -67,4 +67,4 @@ built-in macOS packet filter (PF) - in its own section, leaving
 everything else alone - so this Mac's HTTPS and DNS go through the
 local dpi-proxy service; when the service stops or crashes the rules
 are removed and the internet works as before.
-More: https://github.com/kadireren7/dpi-for-everyone
+More: https://github.com/kadireren7/nivyx

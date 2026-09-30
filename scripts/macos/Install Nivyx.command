@@ -1,12 +1,12 @@
 #!/bin/sh
 #
-# dpi-for-everyone: double-click installer for macOS. Finder runs
-# .command files in Terminal.app automatically. Asks for your password
-# once (sudo) and runs install.sh from this same folder. For
-# manual/scripted installs, run install.sh directly instead.
+# Nivyx: double-click installer for macOS. Finder runs .command files
+# in Terminal.app automatically. Asks for your password once (sudo)
+# and runs install.sh from this same folder. For manual/scripted
+# installs, run install.sh directly instead.
 set -u
-cd "$(dirname "$0")" || { echo "install.command: could not cd to its own folder" >&2; exit 1; }
-echo "dpi-for-everyone installer"
+cd "$(dirname "$0")" || { echo "Install Nivyx.command: could not cd to its own folder" >&2; exit 1; }
+echo "Installing Nivyx..."
 echo "This needs administrator (sudo) access to install a system service."
 echo
 if sudo ./install.sh; then status=0; else status=$?; fi
