@@ -1,12 +1,17 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  dpictl for Windows: the same commands as on Linux and macOS.
-    dpictl status [--verbose] | start | stop | restart | logs [N]
-    dpictl diagnose HOST | doctor | support-bundle [FILE] | version
+  nivyx for Windows: the same commands as on Linux and macOS.
+    nivyx status [--verbose] | start | stop | restart | logs [N]
+    nivyx diagnose HOST | doctor | support-bundle [FILE] | version
   start/stop/restart need an elevated terminal.
 
-  dpi-proxy-ctl.cmd is kept as a compatibility alias for dpictl.cmd.
+  This one script is the whole implementation: nivyx.cmd, dpictl.cmd
+  and dpi-proxy-ctl.cmd all call into it unchanged (compatibility
+  aliases, no duplicated logic). Internal identifiers (the "dpi-proxy"
+  Windows service name, install/data folders, dpi-proxy.exe) are kept
+  unchanged from pre-rebrand installs — only user-facing output and
+  command names change here.
 #>
 param(
     [Parameter(Position = 0)][string]$Command = 'status',
@@ -19,6 +24,15 @@ $DataDir    = Join-Path $env:ProgramData 'dpi-proxy'
 $StatusFile = Join-Path $DataDir 'transparent.status'
 $LogFile    = Join-Path $DataDir 'dpi-proxy.log'
 $Exe        = Join-Path $InstDir 'dpi-proxy.exe'
+
+# Color: skip -ForegroundColor when NO_COLOR is set (https://no-color.org).
+# Write-Host colors are console-native (not ANSI), so piped/redirected
+# output never carries color regardless; this only affects interactive use.
+$UseColor = -not $env:NO_COLOR
+function WriteColor([string]$Text, [string]$ColorName) {
+    if ($UseColor -and $ColorName) { Write-Host $Text -ForegroundColor $ColorName }
+    else { Write-Host $Text }
+}
 
 function Field($name) {
     if (-not (Test-Path $StatusFile)) { return '' }
@@ -42,7 +56,7 @@ function Get-VersionString {
 
 function Show-StatusShort {
     $ver = Get-VersionString
-    if ($ver) { Write-Host "dpi-for-everyone $ver" } else { Write-Host 'dpi-for-everyone (version unknown - dpi-proxy.exe not found)' }
+    if ($ver) { WriteColor "Nivyx $ver" Cyan } else { WriteColor 'Nivyx (version unknown - dpi-proxy.exe not found)' Cyan }
     $svc = Get-Service $Service -ErrorAction SilentlyContinue
     if (-not $svc) {
         Write-Host 'Service: Not installed'
@@ -53,7 +67,7 @@ function Show-StatusShort {
         Write-Host 'Failures: 0'
         return
     }
-    if ($svc.Status -eq 'Running') { Write-Host 'Service: Running' } else { Write-Host "Service: $($svc.Status)" }
+    if ($svc.Status -eq 'Running') { WriteColor 'Service: Running' Green } else { WriteColor "Service: $($svc.Status)" Yellow }
     if ($svc.Status -ne 'Running' -or -not (Test-Path $StatusFile)) {
         Write-Host 'Protection: Inactive'
         Write-Host 'DNS: N/A'
@@ -63,15 +77,15 @@ function Show-StatusShort {
         return
     }
     $engine = Field engine
-    if ($engine -eq 'running') { Write-Host 'Protection: Active' } else { Write-Host 'Protection: Starting' }
+    if ($engine -eq 'running') { WriteColor 'Protection: Active' Green } else { WriteColor 'Protection: Starting' Yellow }
     $fails = Field dns_failures
     switch (Field dns_intercept) {
         'doh' {
-            if (-not $fails -or $fails -eq '0') { Write-Host 'DNS: Healthy' }
-            else { Write-Host "DNS: Degraded ($fails failure(s))" }
+            if (-not $fails -or $fails -eq '0') { WriteColor 'DNS: Healthy' Green }
+            else { WriteColor "DNS: Degraded ($fails failure(s))" Yellow }
         }
         'off' { Write-Host 'DNS: Not intercepted' }
-        default { Write-Host 'DNS: Unknown' }
+        default { WriteColor 'DNS: Unknown' Yellow }
     }
     $mode = Field mode
     if ($mode) { Write-Host ("Mode: " + $mode.Substring(0,1).ToUpper() + $mode.Substring(1)) } else { Write-Host 'Mode: Unknown' }
@@ -99,11 +113,11 @@ function Show-StatusVerbose {
     Write-Host "verified:  $(Field verified_ok) ok, $(Field verified_bad) rejected"
     Write-Host "learned:   $(Field decisions) decision(s); last: $(Field last_learned)"
     $c = Field conflict
-    if ($c -and $c -ne 'none') { Write-Host "CONFLICT:  $c - stop the other tool" -ForegroundColor Yellow }
+    if ($c -and $c -ne 'none') { WriteColor "CONFLICT:  $c - stop the other tool" Yellow }
 }
 
 function Show-Diagnose($domain) {
-    if (-not $domain) { Write-Host 'usage: dpictl diagnose HOST'; exit 1 }
+    if (-not $domain) { Write-Host 'usage: nivyx diagnose HOST'; exit 1 }
     Write-Host "== $domain"
     $ips = (Resolve-DnsName $domain -Type A -DnsOnly -ErrorAction SilentlyContinue |
         Where-Object { $_.IPAddress } | ForEach-Object { $_.IPAddress }) -join ' '
@@ -129,7 +143,7 @@ $script:DoctorFailed = $false
 function Check($level, $msg) {
     if ($level -eq 'FAIL') { $script:DoctorFailed = $true }
     $color = switch ($level) { 'PASS' { 'Green' } 'WARN' { 'Yellow' } 'FAIL' { 'Red' } default { 'White' } }
-    Write-Host ("[{0,-4}] {1}" -f $level, $msg) -ForegroundColor $color
+    WriteColor ("[{0,-4}] {1}" -f $level, $msg) $color
 }
 
 function Doctor-Permissions {
@@ -224,7 +238,7 @@ function Doctor-Stale {
 }
 
 function Invoke-Doctor {
-    Write-Host "dpictl doctor - $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+    Write-Host "nivyx doctor - $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
     Write-Host ''
     Doctor-Permissions
     Doctor-Service
@@ -258,13 +272,13 @@ function Protect-Text([string]$text) {
 
 function Invoke-SupportBundle([string]$OutFile) {
     $ts = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
-    $tmp = Join-Path $env:TEMP "dpictl-support-$ts"
+    $tmp = Join-Path $env:TEMP "nivyx-support-$ts"
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-    if (-not $OutFile) { $OutFile = Join-Path (Get-Location) "dpictl-support-$ts.zip" }
+    if (-not $OutFile) { $OutFile = Join-Path (Get-Location) "nivyx-support-$ts.zip" }
 
     $ver = Get-VersionString
     @(
-        'dpictl support-bundle'
+        'nivyx support-bundle'
         "generated: $ts (UTC)"
         "version:   $ver"
         "binary:    $Exe"
@@ -333,6 +347,21 @@ function Invoke-SupportBundle([string]$OutFile) {
     Write-Host 'Review it before sharing - it may still contain domain names you visited and log timestamps.'
 }
 
+# nivyx.cmd/dpictl.cmd rewrite --help/-h to the literal word "help"
+# before invoking this script (PowerShell's -File argument binder
+# treats a bare "--help"/"-h" token as an attempt to bind a *named*
+# parameter and aborts with NamedParameterNotFound before any script
+# code runs — a plain word binds fine positionally). $Command is still
+# checked directly for anyone invoking this script itself.
+if ($Command -in '--help', '-h', 'help') {
+    Write-Host 'Nivyx -- lightweight system-wide DPI bypass'
+    Write-Host ''
+    Write-Host 'Usage: nivyx status [--verbose] | start | stop | restart | logs [N] | diagnose HOST | doctor | support-bundle [FILE] | version'
+    Write-Host ''
+    Write-Host 'nivyx is the primary command; dpictl and dpi-proxy-ctl remain compatibility aliases for it.'
+    exit 0
+}
+
 switch ($Command) {
     'status' {
         # dpictl.cmd sets DPICTL_VERBOSE=1 when it sees --verbose/-v
@@ -354,10 +383,10 @@ switch ($Command) {
     'support-bundle' { Invoke-SupportBundle $Arg }
     'version'        {
         $ver = Get-VersionString
-        if ($ver) { Write-Host "dpi-for-everyone $ver" } else { Write-Host 'dpi-for-everyone (version unknown - dpi-proxy.exe not found)' }
+        if ($ver) { Write-Host "Nivyx $ver" } else { Write-Host 'Nivyx (version unknown - dpi-proxy.exe not found)' }
     }
     default    {
-        Write-Host 'Usage: dpictl status [--verbose] | start | stop | restart | logs [N] | diagnose HOST | doctor | support-bundle [FILE] | version'
+        Write-Host "Nivyx: unknown command '$Command' (see: nivyx --help)"
         exit 1
     }
 }

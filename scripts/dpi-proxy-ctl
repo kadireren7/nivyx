@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# Compatibility alias for dpictl (the primary CLI as of v2.0). Existing
-# scripts that call dpi-proxy-ctl keep working unchanged: every
-# argument is passed straight through, with the same exit status.
+# Compatibility alias for nivyx (the primary CLI as of v2.1; dpictl is
+# also kept as an alias). Existing scripts that call dpi-proxy-ctl keep
+# working unchanged: every argument is passed straight through, with
+# the same exit status.
 #
-# See scripts/dpictl for the actual implementation.
+# See scripts/dpictl (== scripts/nivyx) for the actual implementation.
 
 set -euo pipefail
 

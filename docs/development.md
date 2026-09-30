@@ -118,7 +118,7 @@ the real `nft` success path.
 Prebuilt releases (packet mode is Linux-only and needs
 root/capabilities, so it's a build-from-source thing, not a release
 artifact) are published on the
-[releases page](https://github.com/kadireren7/dpi-for-everyone/releases)
+[releases page](https://github.com/kadireren7/nivyx/releases)
 for each tag: `dpi-proxy-linux-x86_64`, `dpi-proxy-windows-x86_64.zip`,
 and (from v1.2.0-rc1) `dpi-proxy-macos-arm64.zip` /
 `dpi-proxy-macos-x86_64.zip`, alongside a `SHA256SUMS` file. Every

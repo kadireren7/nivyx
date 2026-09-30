@@ -97,8 +97,9 @@ stepn "install (sudo ./install.sh from the package, as a user would)"
 ( cd "$PKG" && sudo ./install.sh ) || die "install.sh failed"
 wait_running || die "service not running after install"
 [ -f "/Library/LaunchDaemons/$LABEL.plist" ] || die "plist missing"
-[ -x /usr/local/bin/dpi-proxy ] && [ -x /usr/local/bin/dpictl ] && [ -x /usr/local/bin/dpi-proxy-ctl ] \
+[ -x /usr/local/bin/dpi-proxy ] && [ -x /usr/local/bin/nivyx ] && [ -x /usr/local/bin/dpictl ] && [ -x /usr/local/bin/dpi-proxy-ctl ] \
 	|| die "binaries missing"
+command -v nivyx >/dev/null || die "nivyx is not on the PATH"
 command -v dpictl >/dev/null || die "dpictl is not on the PATH"
 command -v dpi-proxy-ctl >/dev/null || die "dpi-proxy-ctl is not on the PATH"
 pass "installed; launchd job running (pid $(daemon_pid)); installer health check passed"
@@ -271,12 +272,20 @@ grep -rl "$HOME" "$bdir" >/dev/null 2>&1 && die "support-bundle leaked \$HOME in
 rm -rf "$bdir" "$bundle"
 pass "support-bundle archive redacted correctly"
 
-stepn "dpi-proxy-ctl (compatibility alias)"
+stepn "nivyx (primary CLI, v2.1+)"
+out="$(nivyx status 2>&1)"; echo "$out"
+echo "$out" | grep -q '^Nivyx ' || die "nivyx status did not print the Nivyx version header"
+nivyx --help >/dev/null || die "nivyx --help failed"
+no_color_out="$(NO_COLOR=1 nivyx status 2>&1)"
+printf '%s' "$no_color_out" | grep -q "$(printf '\033')" && die "NO_COLOR=1 but nivyx emitted a color escape code"
+pass "nivyx status/--help ran; NO_COLOR honored"
+
+stepn "dpictl / dpi-proxy-ctl (compatibility aliases)"
 out="$(dpi-proxy-ctl status 2>&1)"; echo "$out"
 echo "$out" | grep -q '^Service: Running' || die "alias status: service not Running"
 out="$(dpi-proxy-ctl diagnose example.com 2>&1)"; echo "$out"
 echo "$out" | grep -q '^https:        HTTP [23]' || die "alias diagnose failed"
-pass "dpi-proxy-ctl still works as an alias"
+pass "dpictl/dpi-proxy-ctl still work as aliases"
 
 stepn "restart keeps working"
 sudo dpictl restart >/dev/null || die "restart failed"
@@ -348,11 +357,12 @@ stepn "uninstall leaves nothing behind"
 ( cd "$PKG" && sudo ./uninstall.sh ) || die "uninstall.sh failed"
 [ -e "/Library/LaunchDaemons/$LABEL.plist" ] && die "plist left"
 launchctl print "system/$LABEL" >/dev/null 2>&1 && die "launchd job left"
-for f in /usr/local/bin/dpi-proxy /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl /usr/local/etc/dpi-proxy \
+for f in /usr/local/bin/dpi-proxy /usr/local/bin/nivyx /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl /usr/local/etc/dpi-proxy \
 	/usr/local/var/dpi-proxy /var/run/dpi-proxy /var/log/dpi-proxy.log /var/log/dpi-proxy.stderr.log; do
 	[ -e "$f" ] && die "$f left"
 done
 # a new shell: this one still has the old location hashed
+/bin/sh -c 'command -v nivyx' >/dev/null && die "nivyx still on the PATH"
 /bin/sh -c 'command -v dpictl' >/dev/null && die "dpictl still on the PATH"
 /bin/sh -c 'command -v dpi-proxy-ctl' >/dev/null && die "dpi-proxy-ctl still on the PATH"
 pgrep -f '^/usr/local/bin/dpi-proxy' >/dev/null && die "a dpi-proxy process is left"

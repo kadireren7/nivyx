@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 #
-# dpictl — control CLI for dpi-proxy's systemd services (Linux).
+# nivyx — control CLI for the Nivyx transparent-mode service (Linux).
+# This one file is the whole implementation: `dpictl` and
+# `dpi-proxy-ctl` are compatibility aliases for it (scripts/nivyx is a
+# symlink to this file; scripts/dpi-proxy-ctl execs it). Internal
+# service/table names (dpi-proxy-transparent, dpi-proxy-packet,
+# dpi_proxy_tp, dpi_proxy, /etc/dpi-proxy, ...) are kept unchanged from
+# pre-rebrand installs — only user-facing output and command names
+# change here.
 #
 # Zero runtime dependencies beyond what the services already need:
 # plain bash around systemctl/journalctl/nft and the installed
@@ -13,9 +20,6 @@
 #
 # Normal use needs none of the diagnostic commands — the transparent
 # engine learns what each host needs by itself.
-#
-# `dpi-proxy-ctl` is kept as a compatibility alias for this script —
-# see that file.
 
 set -euo pipefail
 
@@ -24,7 +28,25 @@ PACKET_SERVICE="dpi-proxy-packet"
 TP_TABLE="dpi_proxy_tp"
 PACKET_TABLE="dpi_proxy"
 
-err() { printf 'dpictl: %s\n' "$1" >&2; }
+# The name the user actually typed (nivyx / dpictl / dpi-proxy-ctl) —
+# used only in usage/error examples, so they always match what was run.
+SELF="$(basename -- "$0")"
+
+# Color: only to a real terminal, and never when NO_COLOR is set
+# (https://no-color.org) — piped/redirected output (support-bundle,
+# logs, scripts) stays plain automatically since it is never a tty.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+	C_GREEN="$(printf '\033[32m')"
+	C_YELLOW="$(printf '\033[33m')"
+	C_RED="$(printf '\033[31m')"
+	C_CYAN="$(printf '\033[36m')"
+	C_DIM="$(printf '\033[2m')"
+	C_RESET="$(printf '\033[0m')"
+else
+	C_GREEN=""; C_YELLOW=""; C_RED=""; C_CYAN=""; C_DIM=""; C_RESET=""
+fi
+
+err() { printf '%s: %s\n' "$SELF" "$1" >&2; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -86,17 +108,17 @@ version_string() {
 status_short() {
 	local ver svc engine table protection dns_state fails bypassed
 	ver="$(version_string)"
-	echo "dpi-for-everyone ${ver:-(version unknown — dpi-proxy not found)}"
+	echo "${C_CYAN}Nivyx ${ver:-(version unknown — dpi-proxy not found)}${C_RESET}"
 
 	svc="inactive"
 	have systemctl && svc="$(systemctl is-active "$TP_SERVICE" 2>/dev/null || true)"
 	if [ "$svc" = active ]; then
-		echo "Service: Running"
+		echo "Service: ${C_GREEN}Running${C_RESET}"
 	elif [ "$svc" = failed ]; then
-		echo "Service: Failed"
+		echo "Service: ${C_RED}Failed${C_RESET}"
 	else
-		echo "Service: Stopped"
-		echo "Protection: Inactive"
+		echo "Service: ${C_YELLOW}Stopped${C_RESET}"
+		echo "Protection: ${C_DIM}Inactive${C_RESET}"
 		echo "DNS: N/A"
 		echo "Mode: N/A"
 		echo "Bypassed: 0"
@@ -120,16 +142,20 @@ status_short() {
 	else
 		protection="Starting"
 	fi
-	echo "Protection: $protection"
+	case "$protection" in
+	Active) echo "Protection: ${C_GREEN}$protection${C_RESET}" ;;
+	Starting) echo "Protection: ${C_YELLOW}$protection${C_RESET}" ;;
+	*) echo "Protection: ${C_RED}$protection${C_RESET}" ;;
+	esac
 
 	fails="$(status_field dns_failures)"
 	case "$(status_field dns_intercept)" in
 	doh)
-		if [ -z "$fails" ] || [ "$fails" = 0 ]; then dns_state="Healthy"
-		else dns_state="Degraded ($fails failure(s))"; fi
+		if [ -z "$fails" ] || [ "$fails" = 0 ]; then dns_state="${C_GREEN}Healthy${C_RESET}"
+		else dns_state="${C_YELLOW}Degraded ($fails failure(s))${C_RESET}"; fi
 		;;
-	off) dns_state="Not intercepted" ;;
-	*) dns_state="Unknown" ;;
+	off) dns_state="${C_DIM}Not intercepted${C_RESET}" ;;
+	*) dns_state="${C_YELLOW}Unknown${C_RESET}" ;;
 	esac
 	echo "DNS: $dns_state"
 
@@ -250,7 +276,7 @@ run_probe() {
 		"$bin" "$@" || rc=$?
 	if [ "$was_active" = 1 ]; then
 		systemctl start "$PACKET_SERVICE" \
-			|| err "could not restart $PACKET_SERVICE — run: sudo dpictl packet start"
+			|| err "could not restart $PACKET_SERVICE — run: sudo $SELF packet start"
 	fi
 	return "$rc"
 }
@@ -264,11 +290,13 @@ run_probe() {
 
 DOCTOR_FAILED=0
 check() {
-	local level="$1" msg="$2"
+	local level="$1" msg="$2" color="$C_RESET"
 	case "$level" in
-	FAIL) DOCTOR_FAILED=1 ;;
+	FAIL) DOCTOR_FAILED=1; color="$C_RED" ;;
+	WARN) color="$C_YELLOW" ;;
+	PASS) color="$C_GREEN" ;;
 	esac
-	printf '[%-4s] %s\n' "$level" "$msg"
+	printf '%s[%-4s]%s %s\n' "$color" "$level" "$C_RESET" "$msg"
 }
 
 doctor_service() {
@@ -297,7 +325,7 @@ doctor_interception() {
 		check PASS "interception: nftables table inet $TP_TABLE present"
 	elif [ "$svc" = active ] && [ "$table" = 0 ]; then
 		if [ "$(id -u)" -ne 0 ]; then
-			check WARN "interception: cannot see nftables state without root (run: sudo dpictl doctor)"
+			check WARN "interception: cannot see nftables state without root (run: sudo $SELF doctor)"
 		else
 			check FAIL "interception: service active but table inet $TP_TABLE is missing"
 		fi
@@ -420,7 +448,7 @@ doctor_permissions() {
 }
 
 doctor() {
-	echo "dpictl doctor — $(date -u +%FT%TZ)"
+	echo "$SELF doctor — $(date -u +%FT%TZ)"
 	echo
 	doctor_permissions
 	doctor_service
@@ -464,10 +492,10 @@ support_bundle() {
 	local outdir out ts bin
 	ts="$(date -u +%Y%m%dT%H%M%SZ)"
 	outdir="$(mktemp -d)"
-	out="${1:-./dpictl-support-$ts.tar.gz}"
+	out="${1:-./nivyx-support-$ts.tar.gz}"
 
 	{
-		echo "dpictl support-bundle"
+		echo "$SELF support-bundle"
 		echo "generated: $ts (UTC)"
 		echo "version:   $(version_string)"
 		bin="$(find_binary)" && echo "binary:    $bin"
@@ -516,8 +544,10 @@ support_bundle() {
 }
 
 usage() {
-	cat <<'EOF'
-Usage: dpictl [--json] <command> [args]
+	cat <<EOF
+Nivyx — lightweight system-wide DPI bypass
+
+Usage: $SELF [--json] <command> [args]
 
   status [--verbose]   compact engine summary (--verbose: full detail)
   start | stop | restart | reload     (need root)
@@ -526,7 +556,7 @@ Usage: dpictl [--json] <command> [args]
   diagnose DOMAIN      read-only look at DNS/HTTPS for DOMAIN
   doctor               health checks (service/DNS/interception/conflicts)
   support-bundle [FILE] local diagnostics archive (no telemetry)
-  version              print the dpi-proxy version and exit
+  version              print the Nivyx version and exit
 
 Packet mode (dpi-proxy-packet, optional):
   packet start|stop|restart|reload|status|logs [N]
@@ -536,7 +566,8 @@ Packet mode (dpi-proxy-packet, optional):
 --json applies to the packet-mode status/networks/strategy output.
 See docs/transparent-mode.md and docs/packet-mode.md.
 
-dpi-proxy-ctl is a compatibility alias for this command.
+nivyx is the primary command; dpictl and dpi-proxy-ctl remain
+compatibility aliases for it (same implementation, no behavior change).
 EOF
 }
 
@@ -597,7 +628,7 @@ logs)
 	exec journalctl -u "$TP_SERVICE" -n "${1:-100}" --no-pager
 	;;
 strategy)
-	[ $# -ge 1 ] || { err "strategy needs a domain, e.g. dpictl strategy discord.com"; exit 1; }
+	[ $# -ge 1 ] || { err "strategy needs a domain, e.g. $SELF strategy discord.com"; exit 1; }
 	tp_strategy "$1"
 	;;
 diagnose)
@@ -612,13 +643,13 @@ support-bundle)
 	;;
 version)
 	ver="$(version_string)"
-	echo "dpi-for-everyone ${ver:-(version unknown — dpi-proxy not found)}"
+	echo "Nivyx ${ver:-(version unknown — dpi-proxy not found)}"
 	;;
 packet)
 	packet_cmd "$@"
 	;;
 probe)
-	[ $# -ge 1 ] || { err "probe needs a domain, e.g. dpictl probe example.com"; exit 1; }
+	[ $# -ge 1 ] || { err "probe needs a domain, e.g. $SELF probe example.com"; exit 1; }
 	run_probe --probe "$1"
 	;;
 reprobe)

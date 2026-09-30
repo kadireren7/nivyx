@@ -18,7 +18,7 @@ jobs:
       - run: strip dpi-proxy
       - uses: actions/upload-artifact@v4
         with:
-          name: dpi-proxy-linux-x86_64
+          name: nivyx-linux-x86_64
           path: dpi-proxy
 
   # Linux transparent mode must still pass its real end-to-end cycle
@@ -49,19 +49,19 @@ jobs:
       - run: make test OPENSSL_PREFIX="$SSL"
       - run: make clean && make all OPENSSL_PREFIX="$SSL" OPENSSL_STATIC=1
       - run: |
-          ./scripts/macos/package.sh dpi-proxy-macos-${{ matrix.arch }}
-          ditto -c -k --keepParent dpi-proxy-macos-${{ matrix.arch }} dpi-proxy-macos-${{ matrix.arch }}.zip
+          ./scripts/macos/package.sh nivyx-macos-${{ matrix.arch }}
+          ditto -c -k --keepParent nivyx-macos-${{ matrix.arch }} nivyx-macos-${{ matrix.arch }}.zip
       # a release is only built from a package that passed the same
       # end-to-end test as CI, on the machine type it is for
       - name: extract the zip and run the transparent mode end-to-end test
         run: |
           mkdir -p "$RUNNER_TEMP/pkg"
-          ditto -x -k dpi-proxy-macos-${{ matrix.arch }}.zip "$RUNNER_TEMP/pkg"
-          ./scripts/macos/e2e-test.sh "$RUNNER_TEMP/pkg/dpi-proxy-macos-${{ matrix.arch }}"
+          ditto -x -k nivyx-macos-${{ matrix.arch }}.zip "$RUNNER_TEMP/pkg"
+          ./scripts/macos/e2e-test.sh "$RUNNER_TEMP/pkg/nivyx-macos-${{ matrix.arch }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: dpi-proxy-macos-${{ matrix.arch }}
-          path: dpi-proxy-macos-${{ matrix.arch }}.zip
+          name: nivyx-macos-${{ matrix.arch }}
+          path: nivyx-macos-${{ matrix.arch }}.zip
 
   windows:
     runs-on: windows-latest
@@ -77,17 +77,17 @@ jobs:
             mingw-w64-x86_64-gcc mingw-w64-x86_64-openssl make curl unzip zip
       - run: ./scripts/windows/fetch-windivert.sh
       - run: make windows CC_WIN=gcc OPENSSL_WIN_PREFIX=/mingw64
-      - run: ./scripts/windows/package.sh dpi-proxy-windows-x86_64
+      - run: ./scripts/windows/package.sh nivyx-windows-x86_64
       # a release is only built from a folder that passed the same
       # end-to-end test as CI
       - name: transparent mode end-to-end (real WinDivert, Administrator)
         shell: pwsh
-        run: ./scripts/windows/e2e-test.ps1 -Package dpi-proxy-windows-x86_64
-      - run: zip -r dpi-proxy-windows-x86_64.zip dpi-proxy-windows-x86_64
+        run: ./scripts/windows/e2e-test.ps1 -Package nivyx-windows-x86_64
+      - run: zip -r nivyx-windows-x86_64.zip nivyx-windows-x86_64
       - uses: actions/upload-artifact@v4
         with:
-          name: dpi-proxy-windows-x86_64
-          path: dpi-proxy-windows-x86_64.zip
+          name: nivyx-windows-x86_64
+          path: nivyx-windows-x86_64.zip
 
   publish:
     # nothing is published unless every build and every end-to-end
@@ -102,13 +102,13 @@ jobs:
       - name: package
         run: |
           mkdir -p release
-          cp dist/dpi-proxy-linux-x86_64/dpi-proxy release/dpi-proxy-linux-x86_64
-          cp dist/dpi-proxy-macos-arm64/dpi-proxy-macos-arm64.zip release/
-          cp dist/dpi-proxy-macos-x86_64/dpi-proxy-macos-x86_64.zip release/
-          cp dist/dpi-proxy-windows-x86_64/dpi-proxy-windows-x86_64.zip release/
-          chmod +x release/dpi-proxy-linux-x86_64
-          (cd release && sha256sum dpi-proxy-linux-x86_64 dpi-proxy-macos-arm64.zip \
-            dpi-proxy-macos-x86_64.zip dpi-proxy-windows-x86_64.zip > SHA256SUMS)
+          cp dist/nivyx-linux-x86_64/dpi-proxy release/nivyx-linux-x86_64
+          cp dist/nivyx-macos-arm64/nivyx-macos-arm64.zip release/
+          cp dist/nivyx-macos-x86_64/nivyx-macos-x86_64.zip release/
+          cp dist/nivyx-windows-x86_64/nivyx-windows-x86_64.zip release/
+          chmod +x release/nivyx-linux-x86_64
+          (cd release && sha256sum nivyx-linux-x86_64 nivyx-macos-arm64.zip \
+            nivyx-macos-x86_64.zip nivyx-windows-x86_64.zip > SHA256SUMS)
       # The only place a release is created: notes come from
       # .github/release-notes/<tag>.md when present.
       - name: create release
@@ -126,10 +126,10 @@ jobs:
             *-*) set -- "$@" --prerelease --latest=false ;;
           esac
           gh release create "${{ github.ref_name }}" \
-            release/dpi-proxy-linux-x86_64 \
-            release/dpi-proxy-macos-arm64.zip \
-            release/dpi-proxy-macos-x86_64.zip \
-            release/dpi-proxy-windows-x86_64.zip \
+            release/nivyx-linux-x86_64 \
+            release/nivyx-macos-arm64.zip \
+            release/nivyx-macos-x86_64.zip \
+            release/nivyx-windows-x86_64.zip \
             release/SHA256SUMS \
-            --title "dpi-for-everyone ${{ github.ref_name }}" \
+            --title "Nivyx ${{ github.ref_name }}" \
             "$@"

@@ -15,5 +15,8 @@ strip "$OUT/dpi-proxy.exe"
 cp "$WD/x64/WinDivert.dll" "$WD/x64/WinDivert64.sys" "$OUT/"
 cp "$WD/LICENSE" "$OUT/WinDivert-LICENSE.txt"
 cp "$ROOT/LICENSE" "$OUT/LICENSE.txt"
-cp "$ROOT"/scripts/windows/{install.ps1,uninstall.ps1,Install.cmd,Uninstall.cmd,dpictl-impl.ps1,dpictl.cmd,dpi-proxy-ctl.cmd,WINDOWS-QUICKSTART.txt} "$OUT/"
+for f in install.ps1 uninstall.ps1 "Install Nivyx.cmd" "Uninstall Nivyx.cmd" \
+	dpictl-impl.ps1 nivyx.cmd dpictl.cmd dpi-proxy-ctl.cmd WINDOWS-QUICKSTART.txt; do
+	cp "$ROOT/scripts/windows/$f" "$OUT/"
+done
 ls -l "$OUT"

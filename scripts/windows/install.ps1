@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Installs dpi-proxy transparent mode on Windows as the "dpi-proxy"
+  Installs Nivyx transparent mode on Windows as the "dpi-proxy"
   service: after this, HTTPS and DNS from every application go through
   the automatic DPI bypass, with no proxy or DNS settings anywhere.
 
@@ -12,7 +12,8 @@
   Installs (and scripts\windows\uninstall.ps1 removes exactly that):
     %ProgramFiles%\dpi-proxy\   dpi-proxy.exe, WinDivert.dll,
                                 WinDivert64.sys, WinDivert-LICENSE.txt,
-                                dpictl.cmd, dpi-proxy-ctl.cmd (alias),
+                                nivyx.cmd (primary), dpictl.cmd,
+                                dpi-proxy-ctl.cmd (aliases),
                                 dpictl-impl.ps1, uninstall.ps1
     %ProgramData%\dpi-proxy\    strategy.conf (kept on reinstall),
                                 learned decisions, status, log
@@ -82,7 +83,7 @@ try {
     foreach ($f in 'WinDivert-LICENSE.txt') {
         if (Test-Path (Join-Path $from $f)) { Copy-Item (Join-Path $from $f) $InstDir -Force }
     }
-    foreach ($f in 'dpictl-impl.ps1', 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'uninstall.ps1', 'Uninstall.cmd') {
+    foreach ($f in 'dpictl-impl.ps1', 'nivyx.cmd', 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'uninstall.ps1', 'Uninstall Nivyx.cmd') {
         $p = Join-Path $Src $f
         if (-not (Test-Path $p)) { $p = Join-Path $from "scripts\windows\$f" }
         Copy-Item $p $InstDir -Force
@@ -147,16 +148,16 @@ catch {
 
 $other = Get-Process -Name goodbyedpi, winws -ErrorAction SilentlyContinue
 Write-Host ''
-Log 'Done. dpi-proxy is running and starts automatically at boot.'
+Log 'Done. Nivyx is running and starts automatically at boot.'
 Write-Host '  HTTPS and DNS from all applications now go through the automatic'
 Write-Host '  bypass; no browser/app proxy settings and no DNS changes are needed.'
 Write-Host ''
-Write-Host '  Status:     .\dpictl status      (in a new window: dpictl status)'
-Write-Host '  Doctor:     dpictl doctor'
-Write-Host '  Logs:       dpictl logs'
-Write-Host '  Stop:       dpictl stop          (networking keeps working, unbypassed)'
+Write-Host '  Status:     .\nivyx status      (in a new window: nivyx status)'
+Write-Host '  Doctor:     nivyx doctor'
+Write-Host '  Logs:       nivyx logs'
+Write-Host '  Stop:       nivyx stop          (networking keeps working, unbypassed)'
 Write-Host "  Uninstall:  powershell -ExecutionPolicy Bypass -File `"$InstDir\uninstall.ps1`""
-Write-Host '  (dpi-proxy-ctl still works as an alias for dpictl)'
+Write-Host '  (dpictl and dpi-proxy-ctl still work as aliases for nivyx)'
 if ($other) {
     Write-Host ''
     Write-Host '  WARNING: another WinDivert-based DPI tool is running' -ForegroundColor Yellow

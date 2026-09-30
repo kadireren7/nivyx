@@ -1,11 +1,11 @@
 #!/bin/sh
 #
-# dpi-proxy for macOS — transparent mode (Beta) installer.
+# Nivyx for macOS — transparent mode installer.
 #
 #   sudo ./install.sh
 #
 # Run it from the extracted package folder. Installs
-#   /usr/local/bin/dpi-proxy, /usr/local/bin/dpi-proxy-ctl
+#   /usr/local/bin/dpi-proxy, /usr/local/bin/nivyx (+ dpictl, dpi-proxy-ctl aliases)
 #   /Library/LaunchDaemons/io.github.kadireren7.dpi-proxy.plist
 #   /usr/local/etc/dpi-proxy/strategy.conf  (kept if it exists)
 # starts the service and checks DNS and HTTPS through it. If that check
@@ -30,7 +30,7 @@ die() { fail "$1"; exit 1; }
 
 [ "$(uname -s)" = Darwin ] || die "this installer is for macOS"
 [ "$(id -u)" -eq 0 ] || die "run it with sudo:  sudo ./install.sh"
-for f in dpi-proxy dpictl dpi-proxy-ctl "$LABEL.plist"; do
+for f in dpi-proxy dpictl dpi-proxy-ctl nivyx "$LABEL.plist"; do
 	[ -f "$HERE/$f" ] || die "$f is missing next to install.sh (extract the whole package)"
 done
 
@@ -80,6 +80,7 @@ fi
 install -m 755 -o root -g wheel "$HERE/dpi-proxy" "$BIN_DIR/dpi-proxy"
 install -m 755 -o root -g wheel "$HERE/dpictl" "$BIN_DIR/dpictl"
 install -m 755 -o root -g wheel "$HERE/dpi-proxy-ctl" "$BIN_DIR/dpi-proxy-ctl"
+install -m 755 -o root -g wheel "$HERE/dpictl" "$BIN_DIR/nivyx"
 if [ ! -f "$ETC_DIR/strategy.conf" ]; then
 	cat >"$ETC_DIR/strategy.conf" <<'CONF'
 # dpi-proxy manual rules. Transparent mode needs none: known-blocked
@@ -96,7 +97,7 @@ CONF
 fi
 install -m 644 -o root -g wheel "$HERE/$LABEL.plist" "$PLIST"
 plutil -lint "$PLIST" >/dev/null || die "$PLIST is not a valid property list"
-echo "    $BIN_DIR/dpi-proxy, $BIN_DIR/dpictl, $PLIST, $ETC_DIR/"
+echo "    $BIN_DIR/dpi-proxy, $BIN_DIR/nivyx, $PLIST, $ETC_DIR/"
 
 log "[4/5] Starting the service..."
 rm -f "$STATUS_FILE"

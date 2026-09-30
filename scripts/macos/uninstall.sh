@@ -54,7 +54,7 @@ if [ -f "$RUN_DIR/pf.token" ]; then
 fi
 
 log "Removing files..."
-rm -f /usr/local/bin/dpi-proxy /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl
+rm -f /usr/local/bin/dpi-proxy /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl /usr/local/bin/nivyx
 created=""
 [ -f "$VAR_DIR/created-dirs" ] && created="$(sort -r -u "$VAR_DIR/created-dirs")"
 rm -rf /usr/local/etc/dpi-proxy "$VAR_DIR" "$RUN_DIR"
@@ -74,6 +74,7 @@ left=""
 [ -e /usr/local/bin/dpi-proxy ] && left="$left /usr/local/bin/dpi-proxy"
 [ -e /usr/local/bin/dpictl ] && left="$left /usr/local/bin/dpictl"
 [ -e /usr/local/bin/dpi-proxy-ctl ] && left="$left /usr/local/bin/dpi-proxy-ctl"
+[ -e /usr/local/bin/nivyx ] && left="$left /usr/local/bin/nivyx"
 [ -e /usr/local/etc/dpi-proxy ] && left="$left /usr/local/etc/dpi-proxy"
 [ -e "$VAR_DIR" ] && left="$left $VAR_DIR"
 launchctl print "system/$LABEL" >/dev/null 2>&1 && left="$left launchd-job"

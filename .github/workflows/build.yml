@@ -109,12 +109,12 @@ jobs:
           kill %1 || true
       - name: package
         run: |
-          ./scripts/macos/package.sh dpi-proxy-macos-${{ matrix.arch }}
-          ditto -c -k --keepParent dpi-proxy-macos-${{ matrix.arch }} dpi-proxy-macos-${{ matrix.arch }}.zip
+          ./scripts/macos/package.sh nivyx-macos-${{ matrix.arch }}
+          ditto -c -k --keepParent nivyx-macos-${{ matrix.arch }} nivyx-macos-${{ matrix.arch }}.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: dpi-proxy-macos-${{ matrix.arch }}
-          path: dpi-proxy-macos-${{ matrix.arch }}.zip
+          name: nivyx-macos-${{ matrix.arch }}
+          path: nivyx-macos-${{ matrix.arch }}.zip
 
   macos-e2e:
     # The real thing on real macOS machines (root, PF, launchd): the
@@ -134,14 +134,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: dpi-proxy-macos-${{ matrix.arch }}
+          name: nivyx-macos-${{ matrix.arch }}
       - name: extract (as a tester would)
         run: |
           mkdir -p "$RUNNER_TEMP/pkg"
-          ditto -x -k dpi-proxy-macos-${{ matrix.arch }}.zip "$RUNNER_TEMP/pkg"
-          ls -l "$RUNNER_TEMP/pkg/dpi-proxy-macos-${{ matrix.arch }}"
+          ditto -x -k nivyx-macos-${{ matrix.arch }}.zip "$RUNNER_TEMP/pkg"
+          ls -l "$RUNNER_TEMP/pkg/nivyx-macos-${{ matrix.arch }}"
       - name: transparent mode end-to-end (PF, launchd, root)
-        run: ./scripts/macos/e2e-test.sh "$RUNNER_TEMP/pkg/dpi-proxy-macos-${{ matrix.arch }}"
+        run: ./scripts/macos/e2e-test.sh "$RUNNER_TEMP/pkg/nivyx-macos-${{ matrix.arch }}"
 
   linux-e2e:
     # Real install -> intercept -> bypass -> stop -> crash -> uninstall
@@ -187,5 +187,5 @@ jobs:
       # machine before a release
       - uses: actions/upload-artifact@v4
         with:
-          name: dpi-proxy-windows-x86_64
+          name: nivyx-windows-x86_64
           path: dist

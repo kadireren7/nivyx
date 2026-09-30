@@ -1,6 +1,6 @@
 [Unit]
 Description=dpi-proxy packet-mode DPI-evasion engine (system-wide, Linux NFQUEUE)
-Documentation=https://github.com/kadireren7/dpi-for-everyone
+Documentation=https://github.com/kadireren7/nivyx
 After=network-online.target
 Wants=network-online.target
 
