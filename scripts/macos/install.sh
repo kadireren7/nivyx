@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Nivyx for macOS — transparent mode (Beta) installer.
+# Nivyx for macOS — transparent mode installer.
 #
 #   sudo ./install.sh
 #

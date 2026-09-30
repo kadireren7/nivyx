@@ -1,4 +1,4 @@
-# macOS (Beta)
+# macOS
 
 macOS transparent mode works the same way as on Linux: the built-in
 macOS packet filter (PF) sends this Mac's HTTPS and DNS to the local
@@ -13,8 +13,8 @@ and networks. Field reports are welcome.
 
 ## Quick start
 
-1. Download **`dpi-proxy-macos-arm64.zip`** (Apple silicon:
-   M1/M2/M3/…) or **`dpi-proxy-macos-x86_64.zip`** (Intel Macs) from
+1. Download **`nivyx-macos-arm64.zip`** (Apple silicon:
+   M1/M2/M3/…) or **`nivyx-macos-x86_64.zip`** (Intel Macs) from
    [Releases](https://github.com/kadireren7/nivyx/releases)
    and double-click it to extract it.
 2. Double-click **`Install Nivyx.command`**. It opens in Terminal and

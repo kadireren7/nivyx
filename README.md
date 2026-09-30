@@ -13,10 +13,10 @@
 </p>
 
 Nivyx gets HTTPS traffic past SNI-based DPI (deep packet inspection)
-filtering. On Linux (and, in beta, on Windows and macOS) it runs as a
-system service: after one install, blocked sites and apps work in
-every browser and application — **automatic and system-wide, with no
-manual proxy configuration and no manual DNS configuration**.
+filtering. On Linux, Windows and macOS it runs as a system service:
+after one install, blocked sites and apps work in every browser and
+application — **automatic and system-wide, with no manual proxy
+configuration and no manual DNS configuration**.
 
 It runs entirely on your own machine. It is **not a VPN**, it does not
 tunnel through a remote server, and it never decrypts or
@@ -27,8 +27,8 @@ man-in-the-middles TLS.
 | Platform | What you get | Validation |
 |---|---|---|
 | Linux | **Transparent automatic mode** | Real ISP/DPI field-tested |
-| Windows 10/11 (x64) | **Transparent automatic mode (Beta)** | Real ISP/DPI field-tested |
-| macOS (Apple silicon, Intel) | **Transparent automatic mode (Beta)** | Real ISP/DPI field-tested |
+| Windows 10/11 (x64) | **Transparent automatic mode** | Real ISP/DPI field-tested |
+| macOS (Apple silicon, Intel) | **Transparent automatic mode** | Real ISP/DPI field-tested |
 
 `nivyx doctor` (or `dpi-proxy --capabilities`) prints what your
 install supports.
@@ -42,7 +42,7 @@ install supports.
 
 Guide: [docs/linux.md](docs/linux.md).
 
-**Windows (Beta):**
+**Windows:**
 
 1. Download the Windows release ZIP.
 2. Extract it.
@@ -50,7 +50,7 @@ Guide: [docs/linux.md](docs/linux.md).
 
 Guide: [docs/windows.md](docs/windows.md).
 
-**macOS (Beta):**
+**macOS:**
 
 1. Download the matching macOS release ZIP (Apple silicon or Intel).
 2. Extract it.
@@ -128,12 +128,12 @@ if they need it.
 - **One interceptor at a time.** Don't run another transparent DPI
   tool (dpi-bypass, GoodbyeDPI, zapret, …) alongside it — `nivyx
   doctor` and the service itself warn if they detect one.
-- **Windows and macOS are Beta**: end-to-end tested in CI on real
-  runners, and field-tested against real ISP-level DPI on one physical
-  Windows PC and one physical Mac respectively; not yet validated
-  across a wide range of consumer hardware and networks. Platform-
-  specific details and limitations: [docs/windows.md](docs/windows.md),
-  [docs/macos.md](docs/macos.md).
+- **Field-tested, not exhaustively validated.** All three platforms
+  are end-to-end tested in CI on real runners, and field-tested
+  against real ISP-level DPI (Windows and macOS each on one physical
+  machine); not yet validated across a wide range of consumer hardware
+  and networks. Platform-specific details and limitations:
+  [docs/windows.md](docs/windows.md), [docs/macos.md](docs/macos.md).
 
 ## Uninstall
 

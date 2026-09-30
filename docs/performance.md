@@ -97,8 +97,8 @@ benchmark hardware), meant to establish an order of magnitude and to
 be re-measured against, not as precise/reproducible-to-the-percent
 benchmarks. Windows' larger footprint (thread count, working set, and
 CPU) reflects doing packet interception in user space (WinDivert),
-already documented as a known Windows-beta cost/limitation, unrelated
-to this milestone's changes. RSS/CPU were not expected to move
+already documented as a known Windows-specific cost/limitation,
+unrelated to this milestone's changes. RSS/CPU were not expected to move
 materially from stripping/dead-code-elimination (those affect on-disk
 size, not the memory footprint of code paths the process actually
 executes) and weren't separately re-measured pre/post for that reason.

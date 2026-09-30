@@ -1,4 +1,4 @@
-# Windows (Beta)
+# Windows
 
 Windows transparent mode works the same way as on Linux: [WinDivert](https://reqrypt.org/windivert.html)
 redirects this machine's own outgoing HTTPS and DNS to the local
@@ -12,7 +12,7 @@ consumer hardware and networks. Field reports are welcome.
 
 ## Quick start
 
-1. Download **`dpi-proxy-windows-x86_64.zip`** from
+1. Download **`nivyx-windows-x86_64.zip`** from
    [Releases](https://github.com/kadireren7/nivyx/releases)
    and extract it.
 2. Double-click **`Install Nivyx.cmd`**. A User Account Control prompt
