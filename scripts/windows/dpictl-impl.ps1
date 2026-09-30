@@ -347,12 +347,13 @@ function Invoke-SupportBundle([string]$OutFile) {
     Write-Host 'Review it before sharing - it may still contain domain names you visited and log timestamps.'
 }
 
-# nivyx.cmd/dpictl.cmd set DPICTL_HELP=1 when they see --help/-h among
-# the raw arguments (PowerShell's own -File argument binder cannot be
-# trusted to hand a bare "--help" token to $Command intact — the same
-# class of bug documented below for --verbose). Checked before the
-# switch so it always wins, regardless of what $Command ended up as.
-if ($env:DPICTL_HELP -eq '1' -or $Command -in '--help', '-h', 'help') {
+# nivyx.cmd/dpictl.cmd rewrite --help/-h to the literal word "help"
+# before invoking this script (PowerShell's -File argument binder
+# treats a bare "--help"/"-h" token as an attempt to bind a *named*
+# parameter and aborts with NamedParameterNotFound before any script
+# code runs — a plain word binds fine positionally). $Command is still
+# checked directly for anyone invoking this script itself.
+if ($Command -in '--help', '-h', 'help') {
     Write-Host 'Nivyx -- lightweight system-wide DPI bypass'
     Write-Host ''
     Write-Host 'Usage: nivyx status [--verbose] | start | stop | restart | logs [N] | diagnose HOST | doctor | support-bundle [FILE] | version'
