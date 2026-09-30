@@ -112,10 +112,12 @@ rm -rf "$bundle_dir" "$bundle"
 pass "dpictl status/doctor/support-bundle/version ran; archive redaction verified"
 
 stepn "nivyx (primary CLI, v2.1+)"
-nivyx status | grep -q '^Nivyx ' || die "nivyx status did not print the Nivyx version header"
+out="$(nivyx status)"; echo "$out"
+echo "$out" | grep -q '^Nivyx ' || die "nivyx status did not print the Nivyx version header"
 nivyx status --verbose
 nivyx --help >/dev/null || die "nivyx --help failed"
-if NO_COLOR=1 nivyx status | grep -q $'\033'; then die "NO_COLOR=1 but nivyx emitted a color escape code"; fi
+no_color_out="$(NO_COLOR=1 nivyx status)"
+if printf '%s' "$no_color_out" | grep -q "$(printf '\033')"; then die "NO_COLOR=1 but nivyx emitted a color escape code"; fi
 pass "nivyx status/--help ran; NO_COLOR honored"
 
 stepn "dpictl / dpi-proxy-ctl (compatibility aliases)"
