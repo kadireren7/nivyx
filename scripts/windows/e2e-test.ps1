@@ -188,6 +188,11 @@ Step 'stats, config, help (v2.2 commands)'
 $nv = Join-Path $InstDir 'nivyx.cmd'
 $out = (& $nv help 2>&1 | Out-String)
 if ($out -notmatch 'update \[--check\]') { Die 'help does not list update' }
+foreach ($cmdName in (Get-Content (Join-Path $PSScriptRoot '..\commands.txt'))) {
+    if (-not $cmdName) { continue }
+    $h = (& $nv help $cmdName 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0 -or -not $h.Trim()) { Die "nivyx help $cmdName failed" }
+}
 $out = (& $nv help config 2>&1 | Out-String)
 if ($out -notmatch 'config show') { Die 'help config failed' }
 $out = (& $nv stats 2>&1 | Out-String); Write-Host $out

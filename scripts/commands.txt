@@ -1,0 +1,16 @@
+status
+start
+stop
+restart
+reload
+logs
+doctor
+diagnose
+stats
+config
+update
+repair
+strategy
+support-bundle
+version
+help

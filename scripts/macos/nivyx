@@ -525,6 +525,7 @@ redact() {
 	user="$(id -un 2>/dev/null || true)"
 	sed -E \
 		-e 's/([Tt]oken|[Kk]ey|[Ss]ecret|[Pp]assword)[=: ]+[A-Za-z0-9_.-]{4,}/\1=[REDACTED]/g' \
+		-e 's/(\[(learn|verify)\] )[^ :]+:/\1<host>:/' \
 		-e "s#${home}#~#g" \
 		-e "s/\\b${user}\\b/[user]/g"
 }
@@ -567,7 +568,7 @@ support_bundle() {
 	tar -C "$outdir" -czf "$out" .
 	rm -rf "$outdir"
 	echo "Wrote $out"
-	echo "Redacted: tokens/keys/passwords, \$HOME, username, and per-domain DNS history (counts only)."
+	echo "Redacted: tokens/keys/passwords, \$HOME, username, host names in log lines, and per-domain DNS history (counts only)."
 	echo "Review it before sharing — it may still contain domain names you visited and log timestamps."
 }
 
@@ -1007,6 +1008,7 @@ unless you ask. Apply with: sudo $SELF reload" ;;
 	support-bundle) echo "$SELF support-bundle [FILE]   tar.gz of version, status, logs and config; tokens, \$HOME and
 username redacted, host history reduced to counts. Written locally only." ;;
 	version) echo "$SELF version" ;;
+	help) echo "$SELF help [COMMAND]   this overview, or details for one command" ;;
 	*) err "no help for: $1"; return 1 ;;
 	esac
 }

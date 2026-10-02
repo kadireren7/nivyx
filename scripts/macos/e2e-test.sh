@@ -357,6 +357,7 @@ pass "restarted as pid $(daemon_pid) with one watchdog; HTTPS $c"
 
 stepn "stats, config, help (v2.2 commands)"
 nivyx help | grep -q 'update \[--check\]' || die "help does not list update"
+while read -r c; do [ -n "$c" ] || continue; out="$(nivyx help "$c" 2>&1)" && [ -n "$out" ] || die "nivyx help $c failed"; done < "$(dirname "$0")/../commands.txt"
 nivyx help config | grep -q 'config show' || die "help config failed"
 out="$(nivyx stats)"; echo "$out"
 echo "$out" | grep -q '^Connections:' || die "stats printed no connection counters"

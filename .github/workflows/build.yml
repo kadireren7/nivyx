@@ -25,6 +25,14 @@ jobs:
           ./dpi-proxy --version
           ./dpi-proxy --capabilities
           ./dpi-proxy --help >/dev/null
+      - name: cross-platform command parity (static)
+        run: ./scripts/parity-test.sh
+      - name: support-bundle redaction
+        run: ./scripts/redaction-test.sh
+      - name: Linux update package
+        run: |
+          ./scripts/package-linux.sh linux-pkg
+          tar -tzf linux-pkg/nivyx-linux-x86_64.tar.gz
 
   sanitize:
     runs-on: ubuntu-latest
@@ -189,3 +197,70 @@ jobs:
         with:
           name: nivyx-windows-x86_64
           path: dist
+
+  linux-upgrade:
+    # v2.1.0 (the real tagged source, installed with its own installer)
+    # upgraded in place by this tree's installer.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git fetch --tags --force
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev nftables
+      - run: ./scripts/upgrade-test-linux.sh v2.1.0
+
+  macos-upgrade:
+    # the real v2.1.0 release ZIP (checksum-verified) upgraded in place by
+    # the package built from this tree
+    needs: macos
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, arch: arm64 }
+          - { runner: macos-15-intel, arch: x86_64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: nivyx-macos-${{ matrix.arch }}
+      - name: candidate and v2.1.0 packages
+        run: |
+          mkdir -p "$RUNNER_TEMP/new" "$RUNNER_TEMP/old"
+          ditto -x -k nivyx-macos-${{ matrix.arch }}.zip "$RUNNER_TEMP/new"
+          cd "$RUNNER_TEMP/old"
+          base=https://github.com/kadireren7/nivyx/releases/download/v2.1.0
+          curl -fsSL -O "$base/nivyx-macos-${{ matrix.arch }}.zip" -O "$base/SHA256SUMS"
+          grep " nivyx-macos-${{ matrix.arch }}.zip\$" SHA256SUMS | shasum -a 256 -c -
+          ditto -x -k nivyx-macos-${{ matrix.arch }}.zip .
+          ls
+      - name: upgrade v2.1.0 -> candidate (PF, launchd, root)
+        run: ./scripts/macos/upgrade-test.sh "$RUNNER_TEMP/old/nivyx-macos-${{ matrix.arch }}" "$RUNNER_TEMP/new/nivyx-macos-${{ matrix.arch }}"
+
+  windows-upgrade:
+    # the real v2.1.0 release ZIP (checksum-verified) upgraded in place by
+    # the package built from this tree, with real WinDivert
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: nivyx-windows-x86_64
+          path: candidate
+      - name: v2.1.0 package
+        shell: pwsh
+        run: |
+          $base = 'https://github.com/kadireren7/nivyx/releases/download/v2.1.0'
+          Invoke-WebRequest "$base/nivyx-windows-x86_64.zip" -OutFile old.zip
+          Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
+          $want = (Select-String -Path SHA256SUMS -Pattern 'nivyx-windows-x86_64.zip').Line.Split(' ')[0].ToLower()
+          $got = (Get-FileHash old.zip -Algorithm SHA256).Hash.ToLower()
+          if ($want -ne $got) { throw "v2.1.0 zip checksum mismatch" }
+          Expand-Archive old.zip -DestinationPath old
+          Get-ChildItem old
+      - name: upgrade v2.1.0 -> candidate (real WinDivert, Administrator)
+        shell: pwsh
+        run: ./scripts/windows/upgrade-test.ps1 -OldPackage old/nivyx-windows-x86_64 -NewPackage candidate

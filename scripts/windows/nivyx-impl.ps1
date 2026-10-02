@@ -754,6 +754,7 @@ function Invoke-Doctor {
 function Protect-Text([string]$text) {
     if (-not $text) { return $text }
     $out = $text -replace '(?i)(token|key|secret|password)[=: ]+[A-Za-z0-9_.\-]{4,}', '$1=[REDACTED]'
+    $out = $out -replace '(\[(?:learn|verify)\] )[^ :]+:', '$1<host>:'
     $userHome = $env:USERPROFILE
     if ($userHome) { $out = $out -replace [regex]::Escape($userHome), '~' }
     $userName = $env:USERNAME
@@ -835,7 +836,7 @@ function Invoke-SupportBundle([string]$OutFile) {
     Remove-Item $tmp -Recurse -Force
 
     Write-Host "Wrote $OutFile"
-    Write-Host 'Redacted: tokens/keys/passwords, %USERPROFILE%, username, and per-domain DNS history (counts only).'
+    Write-Host 'Redacted: tokens/keys/passwords, %USERPROFILE%, username, host names in log lines, and per-domain DNS history (counts only).'
     Write-Host 'Review it before sharing - it may still contain domain names you visited and log timestamps.'
 }
 
@@ -885,6 +886,7 @@ function Show-CommandHelp([string]$c) {
         'strategy' { Write-Host 'nivyx strategy DOMAIN   which rule applies right now (manual / learned / automatic)' }
         'support-bundle' { Write-Host 'nivyx support-bundle [FILE]   zip of version, status, logs and config; tokens, profile path and username redacted, host history reduced to counts. Written locally only.' }
         'version'  { Write-Host 'nivyx version' }
+        'help'     { Write-Host 'nivyx help [COMMAND]   this overview, or details for one command' }
         { $_ -in 'start', 'stop', 'restart', 'reload' } { Write-Host "nivyx $c   (elevated) control the service; stop leaves networking untouched" }
         default    { Write-Host "nivyx: no help for: $c"; exit 1 }
     }

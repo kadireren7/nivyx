@@ -128,25 +128,26 @@ done
 pass "only nivyx is installed"
 
 stepn "stats, config, diagnose, help (v2.2 commands)"
-nivyx help | grep -q 'update \[--check\]' || die "help does not list update"
-nivyx help config | grep -q 'config show' || die "help config failed"
+out="$(nivyx help)"; echo "$out" | grep -q 'update \[--check\]' || die "help does not list update"
+while read -r c; do [ -n "$c" ] || continue; out="$(nivyx help "$c" 2>&1)" && [ -n "$out" ] || die "nivyx help $c failed"; done < "$ROOT/scripts/commands.txt"
+out="$(nivyx help config)"; echo "$out" | grep -q 'config show' || die "help config failed"
 out="$(nivyx stats)"; echo "$out"
 echo "$out" | grep -q '^Connections:' || die "stats printed no connection counters"
 echo "$out" | grep -q 'example\.com' && die "stats leaked a host name"
-nivyx config path | grep -q strategy.conf || die "config path"
+out="$(nivyx config path)"; echo "$out" | grep -q strategy.conf || die "config path"
 nivyx config check || die "config check failed on the installed config"
-nivyx config show | grep -q 'default = pass' || die "config show"
+out="$(nivyx config show)"; echo "$out" | grep -q 'default = pass' || die "config show"
 out="$(nivyx diagnose example.com)"; echo "$out"
 for h in '^DNS' '^HTTPS' '^Decision' 'Poisoning suspected' 'Source:'; do
 	echo "$out" | grep -q "$h" || die "diagnose output lacks '$h'"
 done
 echo "$out" | grep -q 'Result: Success' || die "diagnose HTTPS did not succeed"
-nivyx diagnose example.com --verbose | grep -q '^Detail' || die "diagnose --verbose has no detail"
+out="$(nivyx diagnose example.com --verbose)"; echo "$out" | grep -q '^Detail' || die "diagnose --verbose has no detail"
 sudo cp -p "$CONF" /tmp/nivyx-conf.orig
-sudo nivyx config set e2e-config-test.example tlsrec | grep -q 'Set e2e-config-test.example' || die "config set"
+out="$(sudo nivyx config set e2e-config-test.example tlsrec)"; echo "$out" | grep -q 'Set e2e-config-test.example' || die "config set"
 grep -q '^e2e-config-test.example = tlsrec' "$CONF" || die "config set did not write the rule"
 [ -f "$CONF.bak" ] || die "config set kept no backup"
-nivyx strategy e2e-config-test.example | grep -q 'tlsrec (manual' || die "strategy does not show the manual rule"
+out="$(nivyx strategy e2e-config-test.example)"; echo "$out" | grep -q 'tlsrec (manual' || die "strategy does not show the manual rule"
 sudo nivyx config unset e2e-config-test.example >/dev/null
 grep -q e2e-config-test "$CONF" && die "config unset left the rule"
 printf 'this is not valid\n' | sudo tee -a "$CONF" >/dev/null
