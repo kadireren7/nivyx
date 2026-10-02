@@ -127,6 +127,135 @@ for old in dpictl dpi-proxy-ctl; do
 done
 pass "only nivyx is installed"
 
+stepn "stats, config, diagnose, help (v2.2 commands)"
+nivyx help | grep -q 'update \[--check\]' || die "help does not list update"
+nivyx help config | grep -q 'config show' || die "help config failed"
+out="$(nivyx stats)"; echo "$out"
+echo "$out" | grep -q '^Connections:' || die "stats printed no connection counters"
+echo "$out" | grep -q 'example\.com' && die "stats leaked a host name"
+nivyx config path | grep -q strategy.conf || die "config path"
+nivyx config check || die "config check failed on the installed config"
+nivyx config show | grep -q 'default = pass' || die "config show"
+out="$(nivyx diagnose example.com)"; echo "$out"
+for h in '^DNS' '^HTTPS' '^Decision' 'Poisoning suspected' 'Source:'; do
+	echo "$out" | grep -q "$h" || die "diagnose output lacks '$h'"
+done
+echo "$out" | grep -q 'Result: Success' || die "diagnose HTTPS did not succeed"
+nivyx diagnose example.com --verbose | grep -q '^Detail' || die "diagnose --verbose has no detail"
+sudo cp -p "$CONF" /tmp/nivyx-conf.orig
+sudo nivyx config set e2e-config-test.example tlsrec | grep -q 'Set e2e-config-test.example' || die "config set"
+grep -q '^e2e-config-test.example = tlsrec' "$CONF" || die "config set did not write the rule"
+[ -f "$CONF.bak" ] || die "config set kept no backup"
+nivyx strategy e2e-config-test.example | grep -q 'tlsrec (manual' || die "strategy does not show the manual rule"
+sudo nivyx config unset e2e-config-test.example >/dev/null
+grep -q e2e-config-test "$CONF" && die "config unset left the rule"
+printf 'this is not valid\n' | sudo tee -a "$CONF" >/dev/null
+nivyx config check && die "config check missed a broken line"
+sudo cp -p /tmp/nivyx-conf.orig "$CONF"
+sudo systemctl reload dpi-proxy-transparent
+pass "stats/config/diagnose/help behave; manual config preserved"
+
+stepn "repair: nothing wrong on a healthy install"
+out="$(sudo nivyx repair)"; echo "$out"
+echo "$out" | grep -q 'nothing else wrong' || die "repair on a healthy install reported something"
+
+stepn "repair: firewall table removed externally"
+sudo nft delete table inet dpi_proxy_tp || die "could not delete the table"
+out="$(sudo nivyx repair)"; echo "$out"
+echo "$out" | grep -q 'fixed' || die "repair fixed nothing"
+sudo nft list table inet dpi_proxy_tp >/dev/null || die "repair did not restore the table"
+c="$(fetch https://example.com/)"; ok "$c" || die "after repair -> '$c'"
+pass "table restored, HTTPS $c"
+
+stepn "repair: service disabled, stopped, with a stale table and status file"
+sudo systemctl disable --now dpi-proxy-transparent >/dev/null 2>&1
+sudo nft add table inet dpi_proxy_tp
+printf 'engine: running\n' | sudo tee "$STATUS" >/dev/null
+out="$(sudo nivyx repair)"; echo "$out"
+systemctl is-enabled --quiet dpi-proxy-transparent || die "repair did not re-enable the service"
+systemctl is-active --quiet dpi-proxy-transparent || die "repair did not start the service"
+c="$(fetch https://example.com/)"; ok "$c" || die "after repair -> '$c'"
+pass "enabled, started, stale state cleared, HTTPS $c"
+
+stepn "repair: damaged learned-decision file"
+sudo systemctl stop dpi-proxy-transparent
+printf '# header\nbroken line\nexample.org %s 4 tlsrec original 1790000000\n' "0123456789abcdef" | sudo tee /var/lib/dpi-proxy/tp-decisions.conf >/dev/null
+out="$(sudo nivyx repair)"; echo "$out"
+echo "$out" | grep -q 'damaged' || die "repair did not report the damaged line"
+grep -q 'broken line' /var/lib/dpi-proxy/tp-decisions.conf && die "damaged line still present"
+c="$(fetch https://example.com/)"; ok "$c" || die "after repair -> '$c'"
+pass "damaged line removed, HTTPS $c"
+
+stepn "update: check, bad checksum, broken release (rollback), good release"
+mock="$(mktemp -d)"; port=18765
+current="$(nivyx version | awk '{print $2}')"
+mk_release() {	# $1 = engine file, $2 = SHA256SUMS mode (good|bad), $3 = version tag
+	rm -rf "$mock/pkg" "$mock"/*.tar.gz "$mock"/SHA256SUMS "$mock"/latest.json
+	mkdir -p "$mock/pkg/nivyx-linux-x86_64"
+	cp "$1" "$mock/pkg/nivyx-linux-x86_64/dpi-proxy"
+	cp "$ROOT/scripts/nivyx" "$mock/pkg/nivyx-linux-x86_64/nivyx"
+	tar -C "$mock/pkg" -czf "$mock/nivyx-linux-x86_64.tar.gz" nivyx-linux-x86_64
+	if [ "$2" = good ]; then
+		(cd "$mock" && sha256sum nivyx-linux-x86_64.tar.gz > SHA256SUMS)
+	else
+		echo "0000000000000000000000000000000000000000000000000000000000000000  nivyx-linux-x86_64.tar.gz" > "$mock/SHA256SUMS"
+	fi
+	cat > "$mock/latest.json" <<JSON
+{"tag_name":"v$3","prerelease":false,"assets":[
+{"name":"nivyx-linux-x86_64.tar.gz","browser_download_url":"http://127.0.0.1:$port/nivyx-linux-x86_64.tar.gz"},
+{"name":"SHA256SUMS","browser_download_url":"http://127.0.0.1:$port/SHA256SUMS"}]}
+JSON
+}
+(cd "$mock" && python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
+httpd=$!
+sleep 1
+export NIVYX_RELEASE_API="http://127.0.0.1:$port/latest.json"
+upd() { sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update "$@"; }
+
+# an engine that claims 99.0.0 and works: the real source, rebuilt with the version overridden
+cp "$ROOT/dpi-proxy" "$mock/engine-current"
+make -C "$ROOT" clean >/dev/null && make -C "$ROOT" VERSION=99.0.0 >/dev/null || die "could not build the 99.0.0 test engine"
+cp "$ROOT/dpi-proxy" "$mock/engine-good"
+cat > "$mock/engine-broken" <<'BROKEN'
+#!/bin/sh
+case "$1" in
+--version) echo "dpi-proxy 99.0.0" ;;
+--capabilities) echo "transparent_mode: supported" ;;
+*) exit 1 ;;
+esac
+BROKEN
+chmod +x "$mock/engine-broken"
+
+mk_release "$mock/engine-good" good 99.0.0
+out="$(nivyx update --check)"; echo "$out"
+echo "$out" | grep -q 'Update available' || die "update --check did not report the newer release"
+[ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "update --check changed the installed version"
+
+mk_release "$mock/engine-good" bad 99.0.0
+upd >/tmp/upd.out 2>&1 && die "update accepted a wrong checksum"
+cat /tmp/upd.out; grep -q 'SHA-256 mismatch' /tmp/upd.out || die "no checksum diagnostic"
+[ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "bad checksum still changed the install"
+systemctl is-active --quiet dpi-proxy-transparent || die "service down after a rejected update"
+
+mk_release "$mock/engine-broken" good 99.0.0
+upd >/tmp/upd.out 2>&1 && die "update kept a release whose engine does not run"
+cat /tmp/upd.out
+[ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "broken release was not rolled back"
+systemctl is-active --quiet dpi-proxy-transparent || die "service down after rollback"
+c="$(fetch https://example.com/)"; ok "$c" || die "after rollback -> '$c'"
+
+cfg_sudo cp -p "$CONF" /tmp/nivyx-conf.orig
+mk_release "$mock/engine-good" good 99.0.0
+upd || die "a good update failed"
+[ "$(nivyx version | awk '{print $2}')" = 99.0.0 ] || die "version after update: $(nivyx version)"
+[ "$(sudo sha256sum "$CONF" | cut -d' ' -f1)" = "$cfg_before" ] || die "update changed the config"
+systemctl is-active --quiet dpi-proxy-transparent || die "service down after update"
+c="$(fetch https://example.com/)"; ok "$c" || die "after update -> '$c'"
+out="$(nivyx update --check)"; echo "$out"; echo "$out" | grep -q 'up to date' || die "still offering an update after updating"
+kill "$httpd" 2>/dev/null || true
+unset NIVYX_RELEASE_API
+pass "check ok; bad checksum rejected; broken release rolled back; good release installed ($current -> 99.0.0), config kept"
+
 stepn "size and resource use"
 ls -l /usr/local/bin/dpi-proxy
 t0="$(date +%s.%N)"

@@ -19,4 +19,5 @@ for f in install.ps1 uninstall.ps1 "Install Nivyx.cmd" "Uninstall Nivyx.cmd" \
 	nivyx-impl.ps1 nivyx.cmd WINDOWS-QUICKSTART.txt; do
 	cp "$ROOT/scripts/windows/$f" "$OUT/"
 done
+cp "$ROOT/scripts/completions/nivyx.ps1" "$OUT/nivyx-completion.ps1"
 ls -l "$OUT"

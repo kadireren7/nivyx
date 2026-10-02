@@ -55,6 +55,7 @@ fi
 
 log "Removing files..."
 rm -f /usr/local/bin/dpi-proxy /usr/local/bin/nivyx
+rm -f /usr/local/share/man/man1/nivyx.1 /usr/local/share/zsh/site-functions/_nivyx
 # legacy v2.1 command names, only if they are our own scripts
 for legacy in /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl; do
 	[ -f "$legacy" ] && [ ! -L "$legacy" ] && grep -q 'dpi-proxy' "$legacy" 2>/dev/null && rm -f "$legacy"

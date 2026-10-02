@@ -79,6 +79,15 @@ if [ -n "$created" ]; then
 fi
 install -m 755 -o root -g wheel "$HERE/dpi-proxy" "$BIN_DIR/dpi-proxy"
 install -m 755 -o root -g wheel "$HERE/nivyx" "$BIN_DIR/nivyx"
+# man page and zsh completion (best effort)
+if [ -f "$HERE/nivyx.1" ]; then
+	install -d /usr/local/share/man/man1
+	install -m 644 "$HERE/nivyx.1" /usr/local/share/man/man1/nivyx.1
+fi
+if [ -f "$HERE/_nivyx" ]; then
+	install -d /usr/local/share/zsh/site-functions
+	install -m 644 "$HERE/_nivyx" /usr/local/share/zsh/site-functions/_nivyx
+fi
 # Upgrade from v2.1 or earlier: drop our own old command names, never an
 # unrelated tool that shares the name.
 for legacy in "$BIN_DIR/dpictl" "$BIN_DIR/dpi-proxy-ctl"; do

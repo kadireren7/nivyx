@@ -242,7 +242,11 @@ short="$(nivyx status 2>&1)"; echo "$short"
 echo "$short" | grep -q '^Service: Running' || die "short status: service not Running"
 echo "$short" | grep -q '^Protection: Active' || die "short status: protection not Active"
 out="$(nivyx diagnose example.com 2>&1)"; echo "$out"
-echo "$out" | grep -q '^https:        HTTP [23]' || die "diagnose failed"
+echo "$out" | grep -q 'Result: Success (HTTP [23]' || die "diagnose failed"
+for h in '^DNS' '^HTTPS' '^Decision' 'Poisoning suspected' 'Source:'; do
+	echo "$out" | grep -q "$h" || die "diagnose output lacks '$h'"
+done
+nivyx diagnose example.com --verbose | grep -q '^Detail' || die "diagnose --verbose has no detail"
 out="$(nivyx logs 5 2>&1)"; echo "$out"
 nivyx logs 200 | grep -q 'transparent mode: TCP/443' || die "logs lack the startup line"
 nivyx strategy example.com | grep -q 'tlsrec (manual' || die "strategy"
@@ -350,6 +354,111 @@ wait_running || die "launchd did not restart the daemon"
 c="$(fetch https://example.com/)"; ok "$c" || die "after restart -> '$c'"
 [ "$(pgrep -f -- '--pf-watchdog' | wc -l | tr -d ' ')" -eq 1 ] || die "not exactly one watchdog"
 pass "restarted as pid $(daemon_pid) with one watchdog; HTTPS $c"
+
+stepn "stats, config, help (v2.2 commands)"
+nivyx help | grep -q 'update \[--check\]' || die "help does not list update"
+nivyx help config | grep -q 'config show' || die "help config failed"
+out="$(nivyx stats)"; echo "$out"
+echo "$out" | grep -q '^Connections:' || die "stats printed no connection counters"
+echo "$out" | grep -q 'example\.com' && die "stats leaked a host name"
+nivyx config path | grep -q strategy.conf || die "config path"
+nivyx config check || die "config check failed on the installed config"
+sudo cp -p "$CONF" /tmp/nivyx-conf.orig
+sudo nivyx config set e2e-config-test.example tlsrec | grep -q 'Set e2e-config-test.example' || die "config set"
+grep -q '^e2e-config-test.example = tlsrec' "$CONF" || die "config set did not write the rule"
+[ -f "$CONF.bak" ] || die "config set kept no backup"
+nivyx strategy e2e-config-test.example | grep -q 'tlsrec (manual' || die "strategy does not show the manual rule"
+sudo nivyx config unset e2e-config-test.example >/dev/null
+grep -q e2e-config-test "$CONF" && die "config unset left the rule"
+printf 'this is not valid\n' | sudo tee -a "$CONF" >/dev/null
+nivyx config check && die "config check missed a broken line"
+sudo cp -p /tmp/nivyx-conf.orig "$CONF"
+pass "stats/config/help behave; manual config preserved"
+
+stepn "repair: nothing wrong, then PF anchor emptied externally, then unloaded job"
+out="$(sudo nivyx repair)"; echo "$out"
+echo "$out" | grep -q 'nothing else wrong' || die "repair on a healthy install reported something"
+sudo pfctl -a "$ANCHOR" -F nat >/dev/null 2>&1; sudo pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
+[ "$(anchor_rules)" -eq 0 ] || die "could not empty the anchor for the test"
+# the daemon's watchdog restores the rules by itself; whichever happens, the end state must be healthy
+sudo nivyx repair >/dev/null; wait_running || die "not running after repair"
+sleep 3
+[ "$(anchor_rules)" -ge 4 ] || die "anchor rules missing after repair"
+sudo launchctl bootout "system/$LABEL" 2>/dev/null; sleep 2
+sudo pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
+out="$(sudo nivyx repair)"; echo "$out"
+wait_running || die "repair did not bring the job back"
+c="$(fetch https://example.com/)"; ok "$c" || die "after repair -> '$c'"
+pass "repair restored interception; HTTPS $c"
+
+stepn "update: check, bad checksum, broken release (rollback), good release"
+mock="$(mktemp -d /tmp/nivyx-mock.XXXXXX)"; port=18765
+arch="$(uname -m)"
+current="$(nivyx version | awk '{print $2}')"
+# an engine that claims to be 9.9.9: the real one with the version string patched
+LC_ALL=C sed 's/2\.2\.0/9.9.9/g' /usr/local/bin/dpi-proxy > "$mock/engine-good"
+chmod +x "$mock/engine-good"; codesign --force -s - "$mock/engine-good" >/dev/null 2>&1
+"$mock/engine-good" --version | grep -q '9\.9\.9' || die "could not build the 9.9.9 test engine ($("$mock/engine-good" --version))"
+cat > "$mock/engine-broken" <<'BROKEN'
+#!/bin/sh
+case "$1" in
+--version) echo "dpi-proxy 9.9.9" ;;
+--capabilities) echo "transparent_mode: supported" ;;
+*) exit 1 ;;
+esac
+BROKEN
+chmod +x "$mock/engine-broken"
+mk_release() {	# $1 engine, $2 good|bad checksum
+	rm -rf "$mock/pkg" "$mock/nivyx-macos-$arch.zip" "$mock/SHA256SUMS" "$mock/latest.json"
+	mkdir -p "$mock/pkg/nivyx-macos-$arch"
+	cp "$1" "$mock/pkg/nivyx-macos-$arch/dpi-proxy"
+	cp "$PKG/nivyx" "$mock/pkg/nivyx-macos-$arch/nivyx"
+	ditto -c -k --keepParent "$mock/pkg/nivyx-macos-$arch" "$mock/nivyx-macos-$arch.zip"
+	if [ "$2" = good ]; then
+		(cd "$mock" && shasum -a 256 "nivyx-macos-$arch.zip" > SHA256SUMS)
+	else
+		echo "0000000000000000000000000000000000000000000000000000000000000000  nivyx-macos-$arch.zip" > "$mock/SHA256SUMS"
+	fi
+	cat > "$mock/latest.json" <<JSON
+{"tag_name":"v9.9.9","prerelease":false,"assets":[
+{"name":"nivyx-macos-$arch.zip","browser_download_url":"http://127.0.0.1:$port/nivyx-macos-$arch.zip"},
+{"name":"SHA256SUMS","browser_download_url":"http://127.0.0.1:$port/SHA256SUMS"}]}
+JSON
+}
+( cd "$mock" && python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1 ) &
+httpd=$!
+sleep 1
+NIVYX_RELEASE_API="http://127.0.0.1:$port/latest.json"
+upd() { sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update "$@"; }
+
+mk_release "$mock/engine-good" good
+out="$(NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update --check)"; echo "$out"
+echo "$out" | grep -q 'Update available' || die "update --check did not report the newer release"
+[ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "update --check changed the installed version"
+
+mk_release "$mock/engine-good" bad
+upd >/tmp/upd.out 2>&1 && die "update accepted a wrong checksum"
+cat /tmp/upd.out; grep -q 'SHA-256 mismatch' /tmp/upd.out || die "no checksum diagnostic"
+[ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "bad checksum still changed the install"
+wait_running || die "service down after a rejected update"
+
+mk_release "$mock/engine-broken" good
+upd >/tmp/upd.out 2>&1 && die "update kept a release whose engine does not run"
+cat /tmp/upd.out
+[ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "broken release was not rolled back"
+wait_running || die "service down after rollback"
+c="$(fetch https://example.com/)"; ok "$c" || die "after rollback -> '$c'"
+
+cfg_before="$(sudo shasum -a 256 "$CONF" | cut -d' ' -f1)"
+mk_release "$mock/engine-good" good
+upd || die "a good update failed"
+[ "$(nivyx version | awk '{print $2}')" = 9.9.9 ] || die "version after update: $(nivyx version)"
+[ "$(sudo shasum -a 256 "$CONF" | cut -d' ' -f1)" = "$cfg_before" ] || die "update changed the config"
+wait_running || die "service down after update"
+c="$(fetch https://example.com/)"; ok "$c" || die "after update -> '$c'"
+kill "$httpd" 2>/dev/null || true
+rm -rf "$mock"
+pass "check ok; bad checksum rejected; broken release rolled back; good release installed ($current -> 9.9.9), config kept"
 
 stepn "uninstall leaves nothing behind"
 ( cd "$PKG" && sudo ./uninstall.sh ) || die "uninstall.sh failed"

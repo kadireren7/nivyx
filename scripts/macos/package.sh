@@ -15,6 +15,8 @@ for f in install.sh uninstall.sh "Install Nivyx.command" "Uninstall Nivyx.comman
 done
 install -m 644 "$ROOT/scripts/macos/io.github.kadireren7.dpi-proxy.plist" "$OUT/"
 install -m 644 "$ROOT/scripts/macos/MACOS-QUICKSTART.txt" "$OUT/"
+install -m 644 "$ROOT/scripts/nivyx.1" "$OUT/nivyx.1"
+install -m 644 "$ROOT/scripts/completions/_nivyx" "$OUT/_nivyx"
 install -m 644 "$ROOT/LICENSE" "$OUT/LICENSE"
 # what the binary needs at run time: macOS system libraries only
 if otool -L "$OUT/dpi-proxy" | tail -n +2 | grep -v -e '^[[:space:]]*/usr/lib/' -e '^[[:space:]]*/System/'; then

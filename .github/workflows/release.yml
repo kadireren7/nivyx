@@ -16,10 +16,13 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - run: make re
       - run: strip dpi-proxy
+      - run: ./scripts/package-linux.sh linux-pkg
       - uses: actions/upload-artifact@v4
         with:
           name: nivyx-linux-x86_64
-          path: dpi-proxy
+          path: |
+            dpi-proxy
+            linux-pkg/nivyx-linux-x86_64.tar.gz
 
   # Linux transparent mode must still pass its real end-to-end cycle
   linux-e2e:
@@ -103,12 +106,14 @@ jobs:
         run: |
           mkdir -p release
           cp dist/nivyx-linux-x86_64/dpi-proxy release/nivyx-linux-x86_64
+          cp dist/nivyx-linux-x86_64/linux-pkg/nivyx-linux-x86_64.tar.gz release/
           cp dist/nivyx-macos-arm64/nivyx-macos-arm64.zip release/
           cp dist/nivyx-macos-x86_64/nivyx-macos-x86_64.zip release/
           cp dist/nivyx-windows-x86_64/nivyx-windows-x86_64.zip release/
           chmod +x release/nivyx-linux-x86_64
-          (cd release && sha256sum nivyx-linux-x86_64 nivyx-macos-arm64.zip \
-            nivyx-macos-x86_64.zip nivyx-windows-x86_64.zip > SHA256SUMS)
+          (cd release && sha256sum nivyx-linux-x86_64 nivyx-linux-x86_64.tar.gz \
+            nivyx-macos-arm64.zip nivyx-macos-x86_64.zip \
+            nivyx-windows-x86_64.zip > SHA256SUMS)
       # The only place a release is created: notes come from
       # .github/release-notes/<tag>.md when present.
       - name: create release
@@ -127,6 +132,7 @@ jobs:
           esac
           gh release create "${{ github.ref_name }}" \
             release/nivyx-linux-x86_64 \
+            release/nivyx-linux-x86_64.tar.gz \
             release/nivyx-macos-arm64.zip \
             release/nivyx-macos-x86_64.zip \
             release/nivyx-windows-x86_64.zip \

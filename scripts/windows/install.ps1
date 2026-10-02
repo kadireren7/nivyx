@@ -12,7 +12,8 @@
   Installs (and scripts\windows\uninstall.ps1 removes exactly that):
     %ProgramFiles%\dpi-proxy\   dpi-proxy.exe, WinDivert.dll,
                                 WinDivert64.sys, WinDivert-LICENSE.txt,
-                                nivyx.cmd, nivyx-impl.ps1, uninstall.ps1
+                                nivyx.cmd, nivyx-impl.ps1, nivyx-completion.ps1,
+                                uninstall.ps1
     %ProgramData%\dpi-proxy\    strategy.conf (kept on reinstall),
                                 learned decisions, status, log
     service "dpi-proxy"         automatic start, restart on failure
@@ -85,6 +86,10 @@ try {
         $p = Join-Path $Src $f
         if (-not (Test-Path $p)) { $p = Join-Path $from "scripts\windows\$f" }
         Copy-Item $p $InstDir -Force
+    }
+    # optional PowerShell tab completion (package: nivyx-completion.ps1; source tree: scripts\completions\nivyx.ps1)
+    foreach ($c in (Join-Path $Src 'nivyx-completion.ps1'), (Join-Path $from 'scripts\completions\nivyx.ps1')) {
+        if (Test-Path $c) { Copy-Item $c (Join-Path $InstDir 'nivyx-completion.ps1') -Force; break }
     }
     # Upgrade from v2.1 or earlier: the old command wrappers lived in our
     # own install folder; nothing outside it is touched.

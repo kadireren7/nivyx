@@ -1028,6 +1028,7 @@ update_cmd() {
 	err "the new version failed its health check; restoring ${current:-the previous version}"
 	mv -f "$bak/dpi-proxy" /usr/local/bin/dpi-proxy
 	mv -f "$bak/nivyx" /usr/local/bin/nivyx
+	systemctl reset-failed "$TP_SERVICE" 2>/dev/null || true
 	systemctl restart "$TP_SERVICE" || true
 	if update_healthy; then
 		err "rolled back; Nivyx ${current:-previous} is running again"
@@ -1040,12 +1041,16 @@ update_cmd() {
 
 # Engine reports running within 30s and HTTPS works through it.
 update_healthy() {
-	local i=0 code
+	local i=0 code pid
+	# the status file must come from the CURRENT service process: a stale
+	# "engine: running" left by the old one proves nothing
 	while [ $i -lt 60 ]; do
-		[ "$(status_field engine)" = running ] && break
+		pid="$(systemctl show -p MainPID --value "$TP_SERVICE" 2>/dev/null || true)"
+		[ -n "$pid" ] && [ "$pid" != 0 ] && [ "$(status_field pid)" = "$pid" ] \
+			&& [ "$(status_field engine)" = running ] && break
 		sleep 0.5; i=$((i + 1))
 	done
-	[ "$(status_field engine)" = running ] || return 1
+	[ "$i" -lt 60 ] || return 1
 	code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 https://example.com/ 2>/dev/null || true)"
 	[[ "$code" =~ ^[23][0-9][0-9]$ ]]
 }

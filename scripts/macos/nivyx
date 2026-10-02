@@ -260,20 +260,113 @@ show_strategy() {
 	fi
 }
 
-# Read-only look at what happens with HOST. Not needed for normal use.
-diagnose() {
+# Seconds as "3d 4h" / "17h 5m" / "42s".
+fmt_duration() {
+	t="${1:-0}"
+	case "$t" in '' | *[!0-9]*) t=0 ;; esac
+	d=$((t / 86400)); h=$(((t % 86400) / 3600)); m=$(((t % 3600) / 60))
+	if [ "$d" -gt 0 ]; then printf '%dd %dh' "$d" "$h"
+	elif [ "$h" -gt 0 ]; then printf '%dh %dm' "$h" "$m"
+	elif [ "$m" -gt 0 ]; then printf '%dm' "$m"
+	else printf '%ds' "$t"; fi
+}
+
+# 0 for a null/private/loopback answer: a resolver should never return
+# those for a public site, so seeing one suggests DNS tampering.
+bogus_ip() {
+	case "$1" in
+	0.* | 127.* | 10.* | 192.168.* | 169.254.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].*) return 0 ;;
+	esac
+	return 1
+}
+
+# Source / strategy / TTL of what applies to HOST. Manual rules always
+# win; then a learned decision for this network; else automatic.
+decision_block() {
 	domain="$1"
-	echo "== $domain"
-	status_short | sed -n '1,3p'
-	echo "system DNS:   $(dscacheutil -q host -a name "$domain" 2>/dev/null \
-		| sed -n 's/^ip_address: //p' | sort -u | tr '\n' ' ')"
-	echo "strategy:     $(show_strategy "$domain" | cut -d' ' -f2-)"
-	echo "https:        $(curl -sS -o /dev/null --max-time 15 \
-		-w 'HTTP %{http_code}, certificate verify=%{ssl_verify_result} (0 = ok), ip=%{remote_ip}, %{time_total}s' \
-		"https://$domain/" 2>&1)"
-	if [ -r "$LOG_FILE" ]; then
-		echo "recent log lines mentioning it:"
-		grep -F " $domain" "$LOG_FILE" 2>/dev/null | tail -n 8 | sed 's/^/  /'
+	fp="$(field network)"
+	rule="$(awk -v d="$domain" '
+		/^\[domains\]/ { in_d = 1; next }
+		/^\[/ { in_d = 0 }
+		in_d && tolower($1) == tolower(d) && $2 == "=" { print $3 }' "$STRATEGY_CONF" 2>/dev/null | tail -n 1)"
+	if [ -n "$rule" ]; then
+		echo "  Source: Manual rule ($STRATEGY_CONF)"
+		echo "  Strategy: $rule"
+		echo "  TTL: none (manual rules do not expire)"
+		return 0
+	fi
+	if [ -n "$fp" ] && [ -r "$DECISIONS" ]; then
+		learned="$(awk -v d="$domain" -v fp="$fp" \
+			'tolower($1) == tolower(d) && $2 == fp { print $3 " " $4 " " $6 }' "$DECISIONS" 2>/dev/null | tail -n 1)"
+		if [ -n "$learned" ]; then
+			set -- $learned
+			now="$(date +%s)"
+			left=$((86400 - (now - $3)))
+			[ "$left" -lt 0 ] && left=0
+			echo "  Source: Learned (this network)"
+			echo "  Strategy: $2 (IPv$1)"
+			echo "  TTL: $(fmt_duration "$left")"
+			echo "  Direct connection: failed earlier on this network, so the bypass is applied"
+			return 0
+		fi
+	fi
+	echo "  Source: Automatic"
+	echo "  Strategy: direct (nothing learned; connected without bypass so far)"
+}
+
+# Read-only look at what happens with HOST, layered: DNS, HTTPS, the
+# decision Nivyx holds. --verbose adds the raw detail.
+diagnose() {
+	domain="$1"; verbose="${2:-0}"
+	sys="$(dscacheutil -q host -a name "$domain" 2>/dev/null | sed -n 's/^ip_address: //p' | grep -E '^[0-9.]+$' | sort -u | tr '\n' ' ')"
+	trusted="$(dig +short +time=2 +tries=1 A "$domain" @1.1.1.1 2>/dev/null | grep -E '^[0-9.]+$' | sort -u | tr '\n' ' ')"
+	resolver="system resolver"
+	[ "$(field dns_intercept)" = doh ] && resolver="DoH (answered by Nivyx)"
+	poison="No"; any_bogus=0; overlap=0
+	for ip in $sys; do
+		bogus_ip "$ip" && any_bogus=1
+		for t in $trusted; do [ "$ip" = "$t" ] && overlap=1; done
+	done
+	if [ -z "$sys" ]; then poison="Unknown (no answer)"
+	elif [ "$any_bogus" = 1 ]; then poison="Yes (private/null address returned)"
+	elif [ -z "$trusted" ]; then poison="Not checked (no trusted answer)"
+	elif [ "$overlap" = 0 ]; then poison="Possible (answers differ; normal for CDNs)"
+	fi
+	echo "${C_CYAN}$domain${C_RESET}"
+	echo
+	echo "DNS"
+	echo "  Resolver: $resolver"
+	echo "  Address: $(printf '%s' "${sys:-none}" | sed 's/ *$//')"
+	echo "  Poisoning suspected: $poison"
+	echo
+	echo "HTTPS"
+	out="$(curl -sS -o /dev/null --max-time 15 -w '%{http_code} %{ssl_verify_result} %{remote_ip}' "https://$domain/" 2>&1)"
+	code="${out%% *}"
+	case "$code" in
+	[0-9][0-9][0-9])
+		if [ "$code" != 000 ]; then
+			vfy="$(printf '%s' "$out" | awk '{print $2}')"
+			echo "  Result: ${C_GREEN}Success${C_RESET} (HTTP $code, certificate $([ "$vfy" = 0 ] && echo OK || echo "verify=$vfy"))"
+			[ "$verbose" = 1 ] && echo "  Remote address: $(printf '%s' "$out" | awk '{print $3}')"
+		else
+			echo "  Result: ${C_RED}Failed${C_RESET} ($out)"
+		fi
+		;;
+	*) echo "  Result: ${C_RED}Failed${C_RESET} ($out)" ;;
+	esac
+	echo
+	echo "Decision"
+	decision_block "$domain"
+	if [ "$verbose" = 1 ]; then
+		echo
+		echo "Detail"
+		echo "  Network fingerprint: $(field network)"
+		echo "  System DNS answers:  ${sys:-none}"
+		echo "  Trusted DNS answers: ${trusted:-none}"
+		if [ -r "$LOG_FILE" ]; then
+			echo "  Recent log lines mentioning it:"
+			grep -F " $domain" "$LOG_FILE" 2>/dev/null | tail -n 5 | sed 's/^/    /'
+		fi
 	fi
 }
 
@@ -450,8 +543,8 @@ support_bundle() {
 
 	{ uname -a; sw_vers; } > "$outdir/os.txt" 2>&1 || true
 
-	status_short > "$outdir/status.txt" 2>&1 || true
-	status_verbose >> "$outdir/status.txt" 2>&1 || true
+	# the "last learned" line names a host: counts only in a bundle
+	{ status_short; status_verbose; } 2>&1 | sed 's/; last: .*$//' > "$outdir/status.txt" || true
 
 	doctor > "$outdir/doctor.txt" 2>&1 || true
 
@@ -478,23 +571,444 @@ support_bundle() {
 	echo "Review it before sharing — it may still contain domain names you visited and log timestamps."
 }
 
+# ---- stats ---------------------------------------------------------------
+# Local-only counters from the daemon's status file plus aggregate counts of
+# the learned-decision file. Never prints host names.
+
+stats() {
+	if [ ! -r "$STATUS_FILE" ]; then
+		echo "Nivyx is not running; no statistics."
+		return 0
+	fi
+	started="$(field started)"
+	now="$(date +%s)"
+	up=0
+	case "$started" in '' | *[!0-9]*) ;; *) up=$((now - started)) ;; esac
+	echo "${C_CYAN}Nivyx $(version_string)${C_RESET} statistics (local only)"
+	echo "Uptime:        $(fmt_duration "$up")"
+	echo "Connections:   $(field flows) intercepted, $(field active) active now"
+	echo "  direct:      $(field direct)"
+	echo "  bypassed:    $(field bypassed)"
+	echo "  passthrough: $(field passthrough)"
+	echo "  failures:    $(field failures)"
+	echo "DNS:           $(field dns_queries) queries, $(field dns_failures) failed ($(field dns_intercept))"
+	echo "Verification:  $(field verified_ok) ok, $(field verified_bad) rejected"
+	echo "Strategy cache: $(field decisions) learned decision(s)"
+	if [ -r "$DECISIONS" ]; then
+		awk '!/^#/ && NF >= 6 { s[$4]++; f[$3]++ }
+			END {
+				for (k in s) printf "  strategy %s: %d\n", k, s[k]
+				for (k in f) printf "  IPv%s: %d\n", k, f[k]
+			}' "$DECISIONS" | sort
+	fi
+	echo "Network:       $(field network) (fingerprint)"
+}
+
+# ---- config --------------------------------------------------------------
+
+config_check() {
+	file="$STRATEGY_CONF"
+	if [ ! -e "$file" ]; then
+		echo "No config file at $file (defaults apply)."
+		return 0
+	fi
+	[ -r "$file" ] || { err "cannot read $file (try sudo)"; return 1; }
+	probs="$(awk '
+		function trim(x) { sub(/^[ \t\r]+/, "", x); sub(/[ \t\r]+$/, "", x); return x }
+		function valid_chain(v,   n, a, i) {
+			n = split(tolower(v), a, "+")
+			if (n < 1 || n > 2) return 0
+			for (i = 1; i <= n; i++)
+				if (a[i] !~ /^(pass|split|disorder|fake|fragment|tlsrec|tlsrec-split)$/) return 0
+			if (n == 2 && !((a[1] == "fake" && a[2] == "split") || (a[1] == "split" && a[2] == "fake"))) return 0
+			return 1
+		}
+		{
+			line = trim($0)
+			if (line == "" || line ~ /^[#;]/) next
+			if (line ~ /^\[/) {
+				in_d = (tolower(line) == "[domains]")
+				if (!in_d) printf "line %d: unknown section (only [domains] exists)\n", NR
+				next
+			}
+			i = index(line, "=")
+			if (i == 0) { printf "line %d: not a valid \"key = value\" line\n", NR; next }
+			k = trim(substr(line, 1, i - 1)); v = trim(substr(line, i + 1))
+			if (k == "") { printf "line %d: empty key\n", NR; next }
+			if (!in_d && tolower(k) == "fake_ttl") {
+				if (v !~ /^[0-9]+$/ || v + 0 < 1 || v + 0 > 255) printf "line %d: invalid fake_ttl (expected 1-255)\n", NR
+				next
+			}
+			if (!in_d && tolower(k) == "default") {
+				if (!valid_chain(v) || v ~ /\+/) printf "line %d: unknown strategy name \"%s\"\n", NR, v
+				next
+			}
+			if (in_d) {
+				if (!valid_chain(v)) printf "line %d: unknown strategy \"%s\" for %s\n", NR, v, k
+				next
+			}
+			printf "line %d: key outside [domains] other than default/fake_ttl: %s\n", NR, k
+		}' "$file")"
+	if [ -n "$probs" ]; then
+		echo "$file has problems (the engine skips these lines and keeps running):"
+		printf '%s\n' "$probs" | sed 's/^/  /'
+		return 1
+	fi
+	echo "$file: OK"
+	return 0
+}
+
+config_set() {
+	domain="${1:-}"; strat="${2:-}"
+	[ -n "$domain" ] && [ -n "$strat" ] || { err "usage: $SELF config set DOMAIN pass|tlsrec|tlsrec-split"; exit 1; }
+	case "$domain" in *[!A-Za-z0-9.-]* | .* | "") err "not a valid domain: $domain"; exit 1 ;; esac
+	case "$strat" in pass | tlsrec | tlsrec-split) ;; *) err "strategy must be pass, tlsrec or tlsrec-split"; exit 1 ;; esac
+	[ -w "$(dirname "$STRATEGY_CONF")" ] || { err "needs administrator rights: sudo $SELF config set $domain $strat"; exit 1; }
+	[ -e "$STRATEGY_CONF" ] || printf 'default = pass\n' > "$STRATEGY_CONF"
+	cp -p "$STRATEGY_CONF" "$STRATEGY_CONF.bak"
+	tmp="$(mktemp "$STRATEGY_CONF.XXXXXX")"
+	awk -v d="$domain" -v s="$strat" '
+		function is_hdr(x) { return tolower(x) ~ /^[ \t]*\[domains\][ \t]*$/ }
+		NR == FNR {
+			if ($0 ~ /^[ \t]*\[/) in1 = is_hdr($0)
+			if (in1 && tolower($1) == tolower(d) && $2 == "=") exists = 1
+			next
+		}
+		/^[ \t]*\[/ { in_d = is_hdr($0) }
+		exists && in_d && !done && tolower($1) == tolower(d) && $2 == "=" { print d " = " s; done = 1; next }
+		{ print }
+		!exists && !done && is_hdr($0) { print d " = " s; done = 1 }
+		END { if (!done) { print ""; print "[domains]"; print d " = " s } }' "$STRATEGY_CONF" "$STRATEGY_CONF" > "$tmp"
+	chmod 644 "$tmp"
+	mv -f "$tmp" "$STRATEGY_CONF"
+	echo "Set $domain = $strat in $STRATEGY_CONF (previous file kept as $STRATEGY_CONF.bak)."
+	config_check || echo "Warning: the file has other problems (see above); your change was still applied."
+	echo "Apply it with: sudo $SELF reload"
+}
+
+config_unset() {
+	domain="${1:-}"
+	[ -n "$domain" ] || { err "usage: $SELF config unset DOMAIN"; exit 1; }
+	[ -w "$STRATEGY_CONF" ] || { err "needs administrator rights: sudo $SELF config unset $domain"; exit 1; }
+	cp -p "$STRATEGY_CONF" "$STRATEGY_CONF.bak"
+	tmp="$(mktemp "$STRATEGY_CONF.XXXXXX")"
+	awk -v d="$domain" '
+		/^[ \t]*\[/ { in_d = (tolower($0) ~ /^[ \t]*\[domains\][ \t]*$/) }
+		in_d && tolower($1) == tolower(d) && $2 == "=" { next }
+		{ print }' "$STRATEGY_CONF" > "$tmp"
+	chmod 644 "$tmp"
+	mv -f "$tmp" "$STRATEGY_CONF"
+	echo "Removed the rule for $domain (previous file kept as $STRATEGY_CONF.bak). Apply it with: sudo $SELF reload"
+}
+
+config_cmd() {
+	sub="${1:-show}"
+	[ $# -gt 0 ] && shift
+	case "$sub" in
+	show)
+		if [ -r "$STRATEGY_CONF" ]; then echo "# $STRATEGY_CONF"; cat "$STRATEGY_CONF"
+		else echo "No config file at $STRATEGY_CONF (defaults apply)."; fi
+		;;
+	path) echo "$STRATEGY_CONF" ;;
+	check) config_check ;;
+	set) config_set "$@" ;;
+	unset) config_unset "$@" ;;
+	*) err "unknown config command: $sub (show | path | check | set | unset)"; exit 1 ;;
+	esac
+}
+
+# ---- repair --------------------------------------------------------------
+# Explicit and mutating, unlike doctor. Touches only Nivyx-owned state: our
+# launchd job, our PF anchor and PF enable reference, our files. Never edits
+# your rules, the main PF ruleset, other anchors, or other software.
+
+REPAIRED=0
+UNREPAIRABLE=0
+fixed() { REPAIRED=$((REPAIRED + 1)); printf '%s[fixed]%s %s\n' "$C_GREEN" "$C_RESET" "$1"; }
+okay() { printf '%s[ ok  ]%s %s\n' "$C_DIM" "$C_RESET" "$1"; }
+cannot() { UNREPAIRABLE=$((UNREPAIRABLE + 1)); printf '%s[ !!  ]%s %s\n' "$C_RED" "$C_RESET" "$1"; }
+
+do_repair() {
+	need_root repair
+	echo "$SELF repair: checking Nivyx-owned state"
+	echo
+	if [ ! -f "$PLIST" ]; then
+		cannot "launchd job $PLIST is missing; re-run install.sh from the Nivyx folder"
+		return 1
+	fi
+	okay "launchd job file is installed"
+
+	if [ -x "$BIN" ]; then okay "engine binary $BIN"
+	elif [ -f "$BIN" ]; then chmod 755 "$BIN" && fixed "made $BIN executable"
+	else cannot "engine binary $BIN is missing; re-run install.sh"; fi
+
+	for dir in "$(dirname "$STRATEGY_CONF")" "$(dirname "$DECISIONS")"; do
+		[ -d "$dir" ] || { mkdir -p "$dir" && chmod 755 "$dir" && fixed "created missing directory $dir"; }
+	done
+	if [ -e "$STRATEGY_CONF" ]; then
+		perm="$(stat -f %Lp "$STRATEGY_CONF" 2>/dev/null)"
+		if [ "$perm" != 644 ]; then
+			chmod 644 "$STRATEGY_CONF" && fixed "set $STRATEGY_CONF to 0644 (contents untouched)"
+		else
+			okay "config permissions"
+		fi
+		if config_check >/dev/null 2>&1; then okay "config syntax"
+		else cannot "config has syntax problems; your rules are not rewritten. See: $SELF config check"; fi
+	else
+		printf 'default = pass\n' > "$STRATEGY_CONF" && chmod 644 "$STRATEGY_CONF" \
+			&& fixed "recreated missing $STRATEGY_CONF with defaults"
+	fi
+
+	if [ -s "$DECISIONS" ]; then
+		bad="$(awk '!/^#/ && NF != 6' "$DECISIONS" | wc -l | tr -d ' ')"
+		if [ "$bad" -gt 0 ]; then
+			launchctl bootout "system/$LABEL" 2>/dev/null || true
+			cp -p "$DECISIONS" "$DECISIONS.bak"
+			awk '/^#/ || NF == 6' "$DECISIONS.bak" > "$DECISIONS"
+			fixed "removed $bad damaged line(s) from the learned-decision file (backup: $DECISIONS.bak)"
+		else
+			okay "learned-decision file"
+		fi
+	fi
+
+	st="$(service_state)"
+	case "$st" in
+	running*) ;;
+	*)
+		if [ -e "$STATUS_FILE" ] && [ "$(field engine)" = running ]; then
+			rm -f "$STATUS_FILE" && fixed "removed stale status file ($STATUS_FILE)"
+		fi
+		n="$(pfctl -a "$ANCHOR" -s nat 2>/dev/null | grep -c '^rdr')"
+		m="$(pfctl -a "$ANCHOR" -s rules 2>/dev/null | grep -c .)"
+		if [ "${n:-0}" -gt 0 ] || [ "${m:-0}" -gt 0 ]; then
+			pfctl -a "$ANCHOR" -F nat >/dev/null 2>&1 || true
+			pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1 || true
+			pfctl -a "$ANCHOR" -F Tables >/dev/null 2>&1 || true
+			fixed "flushed stale rules from our PF anchor $ANCHOR (no other anchor or the main ruleset touched)"
+		else
+			okay "no stale PF rules in our anchor"
+		fi
+		if [ -f /var/run/dpi-proxy/pf.token ]; then
+			token="$(tr -cd '0-9' </var/run/dpi-proxy/pf.token)"
+			if [ -n "$token" ] && pfctl -X "$token" >/dev/null 2>&1; then
+				rm -f /var/run/dpi-proxy/pf.token
+				fixed "released our leftover PF enable reference"
+			fi
+		fi
+		;;
+	esac
+
+	if launchctl print-disabled system 2>/dev/null | grep -q "\"$LABEL\" => \(true\|disabled\)"; then
+		launchctl enable "system/$LABEL" && fixed "enabled the launchd job so it starts at boot"
+	else
+		okay "launchd job is enabled"
+	fi
+
+	case "$(service_state)" in
+	running*)
+		okay "service is running"
+		if [ "$(field pf)" != enabled ] && [ -n "$(field pf)" ]; then
+			launchctl kickstart -k "system/$LABEL" && fixed "restarted the service: PF reported \"$(field pf)\""
+		fi
+		;;
+	loaded)
+		launchctl kickstart "system/$LABEL" && fixed "started the service (was loaded but not running)"
+		;;
+	*)
+		launchctl bootstrap system "$PLIST" && fixed "loaded and started the service (was not loaded)"
+		;;
+	esac
+	if wait_running; then okay "engine reports running"; else cannot "engine did not report running within 15s; see: $SELF logs"; fi
+	echo
+	if [ "$UNREPAIRABLE" -gt 0 ]; then
+		echo "Repair finished with $UNREPAIRABLE problem(s) it cannot fix alone ($REPAIRED fixed)."
+		return 1
+	fi
+	echo "Repair finished: $REPAIRED fixed, nothing else wrong."
+}
+
+# ---- update --------------------------------------------------------------
+# Only on explicit request. Official GitHub releases; SHA-256 verified
+# against SHA256SUMS before anything is installed; config and learned state
+# untouched; a failed health check restores the previous version.
+# NIVYX_RELEASE_API overrides the endpoint (test suite only; announced).
+
+RELEASE_API="${NIVYX_RELEASE_API:-https://api.github.com/repos/kadireren7/nivyx/releases/latest}"
+OFFICIAL_PREFIX="https://github.com/kadireren7/nivyx/releases/download/"
+
+# True if $1 is strictly newer than $2 (numeric x.y.z comparison).
+ver_gt() {
+	awk -v a="$1" -v b="$2" 'BEGIN {
+		na = split(a, x, "."); nb = split(b, y, ".")
+		n = (na > nb) ? na : nb
+		for (i = 1; i <= n; i++) {
+			if ((x[i] + 0) > (y[i] + 0)) exit 0
+			if ((x[i] + 0) < (y[i] + 0)) exit 1
+		}
+		exit 1 }'
+}
+
+update_healthy() {
+	wait_running || return 1
+	code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 https://example.com/ 2>/dev/null || true)"
+	case "$code" in 2[0-9][0-9] | 3[0-9][0-9]) return 0 ;; *) return 1 ;; esac
+}
+
+do_update() {
+	check=0
+	for a in "$@"; do
+		case "$a" in
+		--check) check=1 ;;
+		*) err "unknown update option: $a"; exit 1 ;;
+		esac
+	done
+	current="$(version_string)"
+	[ -n "${NIVYX_RELEASE_API:-}" ] && echo "note: using update source $RELEASE_API" >&2
+	json="$(curl -fsSL --max-time 20 -H 'Accept: application/vnd.github+json' "$RELEASE_API")" \
+		|| { err "could not reach the release server ($RELEASE_API); check your connection"; exit 1; }
+	latest="$(printf '%s' "$json" | sed -n 's/.*"tag_name"[ ]*:[ ]*"v\{0,1\}\([0-9][0-9.]*\)".*/\1/p' | head -n 1)"
+	[ -n "$latest" ] || { err "no stable release found"; exit 1; }
+	echo "Current: ${current:-unknown}"
+	echo "Latest:  $latest"
+	if ! ver_gt "$latest" "${current:-0}"; then
+		echo "Nivyx is up to date."
+		return 0
+	fi
+	echo "Update available."
+	if [ "$check" = 1 ]; then echo "Run: sudo $SELF update"; return 0; fi
+
+	need_root update
+	case "$(uname -m)" in
+	arm64) arch=arm64 ;;
+	x86_64) arch=x86_64 ;;
+	*) err "no release asset for this architecture ($(uname -m))"; exit 1 ;;
+	esac
+	asset="nivyx-macos-$arch.zip"
+	url="$(printf '%s' "$json" | grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*/'"$asset"'"' | sed 's/.*"\(http[^"]*\)"$/\1/' | head -n 1)"
+	sums_url="$(printf '%s' "$json" | grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*/SHA256SUMS"' | sed 's/.*"\(http[^"]*\)"$/\1/' | head -n 1)"
+	[ -n "$url" ] && [ -n "$sums_url" ] || { err "release $latest has no $asset and/or SHA256SUMS"; exit 1; }
+	if [ -z "${NIVYX_RELEASE_API:-}" ]; then
+		case "$url" in "$OFFICIAL_PREFIX"*) ;; *) err "refusing a download URL outside the official repository"; exit 1 ;; esac
+		case "$sums_url" in "$OFFICIAL_PREFIX"*) ;; *) err "refusing a download URL outside the official repository"; exit 1 ;; esac
+	fi
+
+	work="$(mktemp -d /private/var/tmp/nivyx-update.XXXXXX)"
+	trap 'rm -rf "$work"' EXIT
+	echo "Downloading $asset ..."
+	curl -fsSL --max-time 300 -o "$work/$asset" "$url" || { err "download failed"; exit 1; }
+	curl -fsSL --max-time 60 -o "$work/SHA256SUMS" "$sums_url" || { err "could not download SHA256SUMS"; exit 1; }
+	want="$(awk -v a="$asset" '$2 == a || $2 == "*" a { print $1 }' "$work/SHA256SUMS" | head -n 1)"
+	got="$(shasum -a 256 "$work/$asset" | awk '{print $1}')"
+	if [ -z "$want" ] || [ "$want" != "$got" ]; then
+		err "SHA-256 mismatch for $asset (expected ${want:-<none listed>}, got $got); nothing was installed"
+		exit 1
+	fi
+	echo "SHA-256 verified."
+
+	ditto -x -k "$work/$asset" "$work" || { err "could not unpack the download"; exit 1; }
+	pkg="$work/nivyx-macos-$arch"
+	[ -x "$pkg/dpi-proxy" ] && [ -f "$pkg/nivyx" ] || { err "unexpected package layout; nothing was installed"; exit 1; }
+	"$pkg/dpi-proxy" --capabilities 2>/dev/null | grep -q '^transparent_mode: supported' \
+		|| { err "the downloaded engine does not run here; nothing was installed"; exit 1; }
+	[ "$("$pkg/dpi-proxy" --version 2>/dev/null | sed -n 's/^dpi-proxy //p')" = "$latest" ] \
+		|| { err "the downloaded engine is not version $latest; nothing was installed"; exit 1; }
+
+	bak="/usr/local/var/dpi-proxy/rollback"
+	mkdir -p "$bak"
+	cp -p /usr/local/bin/dpi-proxy "$bak/dpi-proxy"
+	cp -p /usr/local/bin/nivyx "$bak/nivyx"
+	install -m 755 -o root -g wheel "$pkg/dpi-proxy" /usr/local/bin/.dpi-proxy.new
+	install -m 755 -o root -g wheel "$pkg/nivyx" /usr/local/bin/.nivyx.new
+	mv -f /usr/local/bin/.dpi-proxy.new /usr/local/bin/dpi-proxy
+	mv -f /usr/local/bin/.nivyx.new /usr/local/bin/nivyx
+	[ -f "$pkg/nivyx.1" ] && install -d /usr/local/share/man/man1 && install -m 644 "$pkg/nivyx.1" /usr/local/share/man/man1/nivyx.1
+	echo "Installed $latest; restarting the service ..."
+	rc=0
+	launchctl kickstart -k "system/$LABEL" || rc=1
+	if [ "$rc" = 0 ] && update_healthy; then
+		echo "Health check passed."
+		echo "Nivyx updated to $latest. Configuration and learned state were kept."
+		rm -rf "$bak"
+		return 0
+	fi
+	err "the new version failed its health check; restoring ${current:-the previous version}"
+	mv -f "$bak/dpi-proxy" /usr/local/bin/dpi-proxy
+	mv -f "$bak/nivyx" /usr/local/bin/nivyx
+	launchctl kickstart -k "system/$LABEL" || true
+	if update_healthy; then err "rolled back; Nivyx ${current:-previous} is running again"
+	else err "rollback finished but the service is still unhealthy: sudo $SELF repair"; fi
+	rm -rf "$bak"
+	exit 1
+}
+
 usage() {
 	cat <<EOF
-Nivyx — lightweight system-wide DPI bypass
+Nivyx — system-wide DPI bypass
 
-Usage: $SELF <command> [args]
+Usage: $SELF <command> [options]
 
-  status [--verbose]   engine, DNS, counters, PF state
-  start | stop | restart | reload     (need sudo)
-  logs [N]             recent log lines (default 100)
-  strategy HOST        what applies to HOST right now
-  diagnose HOST        read-only look at DNS/HTTPS for HOST
-  doctor               health checks (service/DNS/interception/conflicts)
-  support-bundle [FILE] local diagnostics archive (no telemetry)
-  version              print the Nivyx version and exit
+Everyday
+  status [--verbose]       is it working? (--verbose: full detail)
+  doctor                   health checks (read-only)
+  diagnose DOMAIN          explain what happens for one site (--verbose: detail)
+  stats                    local counters (no browsing history)
+  logs [N]                 recent log lines
 
-Uninstall: sudo ./uninstall.sh (in the extracted package folder).
+Control (need sudo)
+  start | stop | restart | reload
+  repair                   fix Nivyx-owned state (service, stale rules, files)
+  update [--check]         update to the latest official release
+
+Configuration
+  config show|path|check|set DOMAIN STRATEGY|unset DOMAIN
+  strategy DOMAIN          which rule applies to DOMAIN right now
+
+Other
+  support-bundle [FILE]    redacted local diagnostics archive (no telemetry)
+  version                  print the version
+  help [COMMAND]           this text, or help for one command
+
+Documentation: docs/cli.md, man nivyx
 EOF
+}
+
+help_cmd() {
+	case "${1:-}" in
+	"") usage ;;
+	status) echo "$SELF status [--verbose]
+Shows version, service state, protection, DNS health and mode. --verbose adds
+flows, counters, the network fingerprint and the PF state." ;;
+	doctor) echo "$SELF doctor
+Read-only health checks: service, interception, DNS, reachability, conflicts,
+VPN, stale rules. Changes nothing; exits 1 if a check failed. Use 'repair' to fix." ;;
+	diagnose) echo "$SELF diagnose DOMAIN [--verbose]
+Explains DNS (resolver, address, poisoning suspected), HTTPS (result through
+Nivyx) and the decision Nivyx holds (source, strategy, TTL). Read-only." ;;
+	stats) echo "$SELF stats
+Uptime, connection counters, DNS counters and strategy-cache sizes from the
+local status file. No hostnames; nothing leaves this machine." ;;
+	logs) echo "$SELF logs [N]   last N log lines (default 100)" ;;
+	start | stop | restart | reload) echo "$SELF $1   (sudo) control the service; stop leaves networking untouched" ;;
+	repair) echo "$SELF repair   (sudo)
+Fixes Nivyx-owned state only: unloaded service, stale status file, stale rules
+in our PF anchor, leftover PF enable reference, file permissions, damaged
+learned-decision file. Never edits your rules, the main PF ruleset or other
+anchors. Every repair is printed." ;;
+	update) echo "$SELF update [--check]   (sudo to apply)
+--check only compares versions. Otherwise downloads the official release,
+verifies its SHA-256 against SHA256SUMS, installs, restarts, health-checks,
+and restores the previous version if the check fails. Config and learned state
+are kept. Never runs on its own." ;;
+	config) echo "$SELF config show | path | check | set DOMAIN STRATEGY | unset DOMAIN
+STRATEGY is pass, tlsrec or tlsrec-split. Manual rules always override automatic
+learning. 'set' and 'unset' change one line, keep a .bak copy, and never run
+unless you ask. Apply with: sudo $SELF reload" ;;
+	strategy) echo "$SELF strategy DOMAIN   which rule applies right now (manual / learned / automatic)" ;;
+	support-bundle) echo "$SELF support-bundle [FILE]   tar.gz of version, status, logs and config; tokens, \$HOME and
+username redacted, host history reduced to counts. Written locally only." ;;
+	version) echo "$SELF version" ;;
+	*) err "no help for: $1"; return 1 ;;
+	esac
 }
 
 cmd="${1:-status}"
@@ -518,16 +1032,28 @@ strategy)
 	show_strategy "$1"
 	;;
 diagnose)
-	[ $# -ge 1 ] || { err "diagnose needs a host, e.g. $SELF diagnose discord.com"; exit 1; }
-	diagnose "$1"
+	dverbose=0; ddomain=""
+	for a in "$@"; do
+		case "$a" in
+		--verbose | -v) dverbose=1 ;;
+		*) ddomain="$a" ;;
+		esac
+	done
+	[ -n "$ddomain" ] || { err "diagnose needs a host, e.g. $SELF diagnose discord.com"; exit 1; }
+	diagnose "$ddomain" "$dverbose"
 	;;
+stats) stats ;;
+config) config_cmd "$@" ;;
+repair) do_repair ;;
+update) do_update "$@" ;;
 doctor) doctor ;;
 support-bundle) support_bundle "${1:-}" ;;
 version)
 	ver="$(version_string)"
 	echo "Nivyx ${ver:-'(version unknown - dpi-proxy not found)'}"
 	;;
--h | --help | help) usage ;;
+-h | --help) usage ;;
+help) help_cmd "${1:-}" ;;
 *)
 	err "unknown command: $cmd"
 	usage >&2
