@@ -30,7 +30,7 @@ installed v2.1.0 service running), 20–30 runs each.
 | Metric | v2.1.0 | v2.2.0 | Notes |
 |---|---|---|---|
 | `nivyx status` latency (Linux, local) | 87 ms | **37 ms** | one `systemctl show` per run instead of three, and status fields read in-shell instead of one `sed`+`head` pair each |
-| `nivyx status --verbose` | 137 ms | see note | not separately optimized; shares the same two improvements |
+| `nivyx status --verbose` (Linux, local) | 137 ms | **83 ms** | same two improvements |
 | `nivyx stats` (new, Linux, local) | — | 38 ms | |
 | CLI size on Linux | 22.9 KB | 47.3 KB | the new commands (update, repair, stats, config, layered diagnose, help) |
 | CLI files installed on Linux | 3 (`dpictl`, `dpi-proxy-ctl`, `nivyx`: 46.5 KB) | 1 (`nivyx`: 47.3 KB) | the aliases are gone |
