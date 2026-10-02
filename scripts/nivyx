@@ -49,13 +49,22 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 # Value of KEY in a unit's Environment= lines, or FALLBACK. An explicit
 # DPI_PROXY_* in the caller's environment still wins (callers apply
-# that with ${VAR:-...}).
+# that with ${VAR:-...}). The unit is queried once per run, not once
+# per key (each systemctl call is a process launch).
+# (Primed in the main shell below: each caller is a command substitution,
+# whose changes to a cache would be lost.)
+TP_ENV_RAW=""
+if have systemctl; then
+	TP_ENV_RAW="$(systemctl show -p Environment --value dpi-proxy-transparent 2>/dev/null | tr ' ' '\n')" || TP_ENV_RAW=""
+fi
 service_env() {
-	local unit="$1" key="$2" fallback="$3" val=""
-	if have systemctl; then
-		val="$(systemctl show -p Environment --value "$unit" 2>/dev/null \
-			| tr ' ' '\n' | sed -n "s/^${key}=//p" | tail -n 1)"
+	local unit="$1" key="$2" fallback="$3" val="" raw=""
+	if [ "$unit" = dpi-proxy-transparent ]; then
+		raw="$TP_ENV_RAW"
+	elif have systemctl; then
+		raw="$(systemctl show -p Environment --value "$unit" 2>/dev/null | tr ' ' '\n')"
 	fi
+	val="$(printf '%s\n' "$raw" | sed -n "s/^${key}=//p" | tail -n 1)"
 	printf '%s' "${val:-$fallback}"
 }
 
@@ -90,8 +99,16 @@ find_packet_binary() {
 
 need_systemctl() { have systemctl || { err "systemctl not found"; exit 1; }; }
 
+# Pure bash (no sed/head launches): status prints a dozen fields.
 status_field() {
-	sed -n "s/^$1: //p" "$TP_STATUS_FILE" 2>/dev/null | head -n 1
+	local line key="$1: "
+	[ -r "$TP_STATUS_FILE" ] || return 0
+	while IFS= read -r line; do
+		case "$line" in
+		"$key"*) printf '%s\n' "${line#"$key"}"; return 0 ;;
+		esac
+	done < "$TP_STATUS_FILE"
+	return 0
 }
 
 version_string() {

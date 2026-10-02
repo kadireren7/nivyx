@@ -45,8 +45,15 @@ need_root() {
 	fi
 }
 
+# Pure shell (no sed/head launches): status prints a dozen fields.
 field() {
-	sed -n "s/^$1: //p" "$STATUS_FILE" 2>/dev/null | head -n 1
+	[ -r "$STATUS_FILE" ] || return 0
+	while IFS= read -r line; do
+		case "$line" in
+		"$1: "*) printf '%s\n' "${line#"$1: "}"; return 0 ;;
+		esac
+	done < "$STATUS_FILE"
+	return 0
 }
 
 version_string() {
