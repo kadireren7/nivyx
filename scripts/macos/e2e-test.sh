@@ -427,13 +427,18 @@ mk_release() {	# $1 engine, $2 good|bad checksum
 {"name":"SHA256SUMS","browser_download_url":"http://127.0.0.1:$port/SHA256SUMS"}]}
 JSON
 }
-( cd "$mock" && python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1 ) &
+mk_release "$mock/engine-good" good
+( cd "$mock" && exec python3 -m http.server "$port" --bind 127.0.0.1 >"$mock/httpd.log" 2>&1 ) &
 httpd=$!
-sleep 1
+t=0
+until curl -fsS --max-time 3 "http://127.0.0.1:$port/latest.json" >/dev/null 2>&1 || [ $t -ge 15 ]; do sleep 1; t=$((t + 1)); done
+curl -fsS --max-time 3 "http://127.0.0.1:$port/latest.json" >/dev/null 2>&1 || {
+	echo "--- mock server ---"; python3 --version; cat "$mock/httpd.log"; lsof -nP -iTCP:"$port" 2>&1 | head -5
+	die "the local mock release server is not reachable"
+}
 NIVYX_RELEASE_API="http://127.0.0.1:$port/latest.json"
 upd() { sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update "$@"; }
 
-mk_release "$mock/engine-good" good
 out="$(NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update --check)"; echo "$out"
 echo "$out" | grep -q 'Update available' || die "update --check did not report the newer release"
 [ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "update --check changed the installed version"

@@ -208,12 +208,6 @@ mk_release() {	# $1 = engine file, $2 = SHA256SUMS mode (good|bad), $3 = version
 {"name":"SHA256SUMS","browser_download_url":"http://127.0.0.1:$port/SHA256SUMS"}]}
 JSON
 }
-(cd "$mock" && python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
-httpd=$!
-sleep 1
-export NIVYX_RELEASE_API="http://127.0.0.1:$port/latest.json"
-upd() { sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update "$@"; }
-
 # an engine that claims 99.0.0 and works: the real source, rebuilt with the version overridden
 cp "$ROOT/dpi-proxy" "$mock/engine-current"
 make -C "$ROOT" clean >/dev/null && make -C "$ROOT" VERSION=99.0.0 >/dev/null || die "could not build the 99.0.0 test engine"
@@ -229,6 +223,14 @@ BROKEN
 chmod +x "$mock/engine-broken"
 
 mk_release "$mock/engine-good" good 99.0.0
+(cd "$mock" && exec python3 -m http.server "$port" --bind 127.0.0.1 >"$mock/httpd.log" 2>&1) &
+httpd=$!
+t=0
+until curl -fsS --max-time 3 "http://127.0.0.1:$port/latest.json" >/dev/null 2>&1 || [ $t -ge 15 ]; do sleep 1; t=$((t + 1)); done
+curl -fsS --max-time 3 "http://127.0.0.1:$port/latest.json" >/dev/null 2>&1 || { cat "$mock/httpd.log"; die "the local mock release server is not reachable"; }
+export NIVYX_RELEASE_API="http://127.0.0.1:$port/latest.json"
+upd() { sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update "$@"; }
+
 out="$(nivyx update --check)"; echo "$out"
 echo "$out" | grep -q 'Update available' || die "update --check did not report the newer release"
 [ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "update --check changed the installed version"

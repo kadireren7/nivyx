@@ -268,11 +268,15 @@ function New-MockRelease([string]$mode) {
         @{ name = 'SHA256SUMS'; browser_download_url = "http://127.0.0.1:$port/SHA256SUMS" }) } | ConvertTo-Json -Depth 5
     Set-Content -Encoding ASCII (Join-Path $mock 'latest.json') $json
 }
+New-MockRelease 'good'
 $httpd = Start-Process -PassThru -WindowStyle Hidden python -ArgumentList '-m', 'http.server', "$port", '--bind', '127.0.0.1' -WorkingDirectory $mock
-Start-Sleep -Seconds 2
+$up = $false
+foreach ($i in 1..20) {
+    try { Invoke-WebRequest -Uri "http://127.0.0.1:$port/latest.json" -UseBasicParsing -TimeoutSec 3 | Out-Null; $up = $true; break } catch { Start-Sleep -Seconds 1 }
+}
+if (-not $up) { Die 'the local mock release server is not reachable' }
 $env:NIVYX_RELEASE_API = "http://127.0.0.1:$port/latest.json"
 
-New-MockRelease 'good'
 $out = (& $nv update --check 2>&1 | Out-String); Write-Host $out
 if ($out -notmatch 'Update available') { Die 'update --check did not report the newer release' }
 if (((& $nv version 2>&1 | Out-String).Trim() -replace '^Nivyx\s+', '') -ne $current) { Die 'update --check changed the installed version' }
