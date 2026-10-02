@@ -45,9 +45,6 @@ EVERYDAY COMMANDS
          sudo nivyx start
          sudo nivyx restart
 
-  dpictl and dpi-proxy-ctl still work with the same commands
-  (compatibility aliases for nivyx).
-
 UNINSTALL
   Double-click "Uninstall Nivyx.command" (in the extracted folder), or
   manually, in the extracted folder:

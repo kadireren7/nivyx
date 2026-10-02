@@ -3,11 +3,8 @@
 `nivyx` is the control CLI for Nivyx's transparent-mode service,
 identical across Linux, Windows and macOS (`nivyx` on Linux/macOS is a
 bash/sh script; on Windows, `nivyx.cmd` runs the equivalent
-PowerShell). `dpictl` and `dpi-proxy-ctl` are kept as compatibility
-aliases — every command below works the same way through any of the
-three names; scripts written against `dpictl` or `dpi-proxy-ctl` keep
-working unchanged. All three share one implementation — there is no
-behavior difference between them.
+PowerShell). It is the only public command; the engine binary
+(`dpi-proxy`) is an internal component you never need to run.
 
 Commands that change service state (`start`/`stop`/`restart`/`reload`)
 need root (`sudo`) on Linux/macOS or an elevated/Administrator terminal

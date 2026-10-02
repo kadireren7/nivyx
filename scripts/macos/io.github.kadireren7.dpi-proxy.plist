@@ -4,7 +4,7 @@
   dpi-proxy transparent mode (macOS), installed by install.sh as
   /Library/LaunchDaemons/io.github.kadireren7.dpi-proxy.plist.
   Starts at boot; restarted by launchd if it crashes. Stopping it
-  (dpi-proxy-ctl stop) removes its PF rules: networking goes back to
+  (nivyx stop) removes its PF rules: networking goes back to
   normal. Log: /var/log/dpi-proxy.log
 -->
 <plist version="1.0">

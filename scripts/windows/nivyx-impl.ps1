@@ -6,9 +6,8 @@
     nivyx diagnose HOST | doctor | support-bundle [FILE] | version
   start/stop/restart need an elevated terminal.
 
-  This one script is the whole implementation: nivyx.cmd, dpictl.cmd
-  and dpi-proxy-ctl.cmd all call into it unchanged (compatibility
-  aliases, no duplicated logic). Internal identifiers (the "dpi-proxy"
+  This one script is the whole implementation; nivyx.cmd calls into it.
+  Internal identifiers (the "dpi-proxy"
   Windows service name, install/data folders, dpi-proxy.exe) are kept
   unchanged from pre-rebrand installs — only user-facing output and
   command names change here.
@@ -347,7 +346,7 @@ function Invoke-SupportBundle([string]$OutFile) {
     Write-Host 'Review it before sharing - it may still contain domain names you visited and log timestamps.'
 }
 
-# nivyx.cmd/dpictl.cmd rewrite --help/-h to the literal word "help"
+# nivyx.cmd rewrites --help/-h to the literal word "help"
 # before invoking this script (PowerShell's -File argument binder
 # treats a bare "--help"/"-h" token as an attempt to bind a *named*
 # parameter and aborts with NamedParameterNotFound before any script
@@ -357,19 +356,17 @@ if ($Command -in '--help', '-h', 'help') {
     Write-Host 'Nivyx -- lightweight system-wide DPI bypass'
     Write-Host ''
     Write-Host 'Usage: nivyx status [--verbose] | start | stop | restart | logs [N] | diagnose HOST | doctor | support-bundle [FILE] | version'
-    Write-Host ''
-    Write-Host 'nivyx is the primary command; dpictl and dpi-proxy-ctl remain compatibility aliases for it.'
     exit 0
 }
 
 switch ($Command) {
     'status' {
-        # dpictl.cmd sets DPICTL_VERBOSE=1 when it sees --verbose/-v
+        # nivyx.cmd sets NIVYX_VERBOSE=1 when it sees --verbose/-v
         # among the raw arguments (see that file for why: PowerShell's
         # own parameter binder cannot be trusted to hand a bare
         # dash-prefixed token to $Arg intact through -File). $Arg is
         # also checked directly for anyone invoking this script itself.
-        if ($env:DPICTL_VERBOSE -eq '1' -or $Arg -eq '--verbose' -or $Arg -eq '-v') { Show-StatusVerbose } else { Show-StatusShort }
+        if ($env:NIVYX_VERBOSE -eq '1' -or $Arg -eq '--verbose' -or $Arg -eq '-v') { Show-StatusVerbose } else { Show-StatusShort }
     }
     'start'    { Start-Service $Service; Show-StatusVerbose }
     'stop'     { Stop-Service $Service; Write-Host 'stopped; networking is back to normal (unbypassed)' }

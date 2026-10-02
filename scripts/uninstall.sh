@@ -13,7 +13,7 @@ PURGE=0
 [ "${1:-}" = "--purge" ] && PURGE=1
 
 SERVICES="dpi-proxy-transparent dpi-proxy-packet"
-BINS="/usr/local/bin/dpi-proxy /usr/local/bin/dpi-proxy-packet /usr/local/bin/nivyx /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl"
+BINS="/usr/local/bin/dpi-proxy /usr/local/bin/dpi-proxy-packet /usr/local/bin/nivyx"
 UNIT_DIR="/etc/systemd/system"
 CONF_DIR="/etc/dpi-proxy"
 STATE_DIR="/var/lib/dpi-proxy"
@@ -37,6 +37,10 @@ systemctl daemon-reload
 log "[2/4] Removing binaries..."
 # shellcheck disable=SC2086
 rm -f $BINS
+# v2.1 and earlier command names, only if they are our own scripts
+for legacy in /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl; do
+	[ -f "$legacy" ] && [ ! -L "$legacy" ] && grep -q 'dpi-proxy' "$legacy" 2>/dev/null && rm -f "$legacy"
+done
 
 log "[3/4] Removing dpi-proxy's own nftables tables (if left over)..."
 for t in dpi_proxy_tp dpi_proxy; do

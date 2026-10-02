@@ -97,11 +97,9 @@ stepn "install (sudo ./install.sh from the package, as a user would)"
 ( cd "$PKG" && sudo ./install.sh ) || die "install.sh failed"
 wait_running || die "service not running after install"
 [ -f "/Library/LaunchDaemons/$LABEL.plist" ] || die "plist missing"
-[ -x /usr/local/bin/dpi-proxy ] && [ -x /usr/local/bin/nivyx ] && [ -x /usr/local/bin/dpictl ] && [ -x /usr/local/bin/dpi-proxy-ctl ] \
+[ -x /usr/local/bin/dpi-proxy ] && [ -x /usr/local/bin/nivyx ] \
 	|| die "binaries missing"
 command -v nivyx >/dev/null || die "nivyx is not on the PATH"
-command -v dpictl >/dev/null || die "dpictl is not on the PATH"
-command -v dpi-proxy-ctl >/dev/null || die "dpi-proxy-ctl is not on the PATH"
 pass "installed; launchd job running (pid $(daemon_pid)); installer health check passed"
 
 stepn "PF: enabled, our anchor loaded, main ruleset untouched, watchdog up"
@@ -215,7 +213,7 @@ pass "5 requests -> $delta flows"
 
 stepn "bypass path: forced tlsrec rule for example.com"
 printf '\n[domains]\nexample.com = tlsrec\n' | sudo tee -a "$CONF" >/dev/null
-sudo dpictl restart >/dev/null || die "restart failed"
+sudo nivyx restart >/dev/null || die "restart failed"
 wait_running || die "not running after restart"
 c="$(fetch https://example.com/)"; ok "$c" || die "example.com with tlsrec -> '$c'"
 wait_status
@@ -234,33 +232,33 @@ ps -o pid=,rss=,vsz=,%cpu=,time= -p "$pid" | awk '{ printf "daemon pid %s: RSS %
 ps -o pid=,rss= -p "$(pgrep -f -- '--pf-watchdog' | head -n 1)" | awk '{ printf "watchdog pid %s: RSS %.1f MB\n", $1, $2/1024 }'
 pass "measured"
 
-stepn "dpictl (as a normal user, by name)"
-out="$(dpictl status --verbose 2>&1)"; echo "$out"
+stepn "nivyx (as a normal user, by name)"
+out="$(nivyx status --verbose 2>&1)"; echo "$out"
 echo "$out" | grep -q '^engine:    running' || die "status --verbose: engine not running"
 for k in mode dns network flows direct bypassed failures pf watchdog; do
 	echo "$out" | grep -q "^$k:" || die "status --verbose lacks '$k'"
 done
-short="$(dpictl status 2>&1)"; echo "$short"
+short="$(nivyx status 2>&1)"; echo "$short"
 echo "$short" | grep -q '^Service: Running' || die "short status: service not Running"
 echo "$short" | grep -q '^Protection: Active' || die "short status: protection not Active"
-out="$(dpictl diagnose example.com 2>&1)"; echo "$out"
+out="$(nivyx diagnose example.com 2>&1)"; echo "$out"
 echo "$out" | grep -q '^https:        HTTP [23]' || die "diagnose failed"
-out="$(dpictl logs 5 2>&1)"; echo "$out"
-dpictl logs 200 | grep -q 'transparent mode: TCP/443' || die "logs lack the startup line"
-dpictl strategy example.com | grep -q 'tlsrec (manual' || die "strategy"
-out="$(sudo dpictl status --verbose 2>&1)"
+out="$(nivyx logs 5 2>&1)"; echo "$out"
+nivyx logs 200 | grep -q 'transparent mode: TCP/443' || die "logs lack the startup line"
+nivyx strategy example.com | grep -q 'tlsrec (manual' || die "strategy"
+out="$(sudo nivyx status --verbose 2>&1)"
 echo "$out" | grep -q '^pf rules:' || die "status as root lacks the live PF rule count"
-dpictl stop >/dev/null 2>&1 && die "stop without sudo should refuse"
-dpictl version | grep -q . || die "version printed nothing"
-pass "dpictl status/diagnose/logs/strategy/version report correctly"
+nivyx stop >/dev/null 2>&1 && die "stop without sudo should refuse"
+nivyx version | grep -q . || die "version printed nothing"
+pass "nivyx status/diagnose/logs/strategy/version report correctly"
 
-stepn "dpictl doctor"
-dpictl doctor || die "doctor reported a failure while the service is healthy"
+stepn "nivyx doctor"
+nivyx doctor || die "doctor reported a failure while the service is healthy"
 pass "doctor: no failures"
 
-stepn "dpictl support-bundle (redaction)"
+stepn "nivyx support-bundle (redaction)"
 bundle="/tmp/dpi-e2e-support-$$.tar.gz"
-dpictl support-bundle "$bundle" || die "support-bundle failed"
+nivyx support-bundle "$bundle" || die "support-bundle failed"
 [ -s "$bundle" ] || die "support-bundle produced an empty/missing archive"
 bdir="/tmp/dpi-e2e-support-$$"
 mkdir -p "$bdir"
@@ -280,21 +278,21 @@ no_color_out="$(NO_COLOR=1 nivyx status 2>&1)"
 printf '%s' "$no_color_out" | grep -q "$(printf '\033')" && die "NO_COLOR=1 but nivyx emitted a color escape code"
 pass "nivyx status/--help ran; NO_COLOR honored"
 
-stepn "dpictl / dpi-proxy-ctl (compatibility aliases)"
-out="$(dpi-proxy-ctl status 2>&1)"; echo "$out"
-echo "$out" | grep -q '^Service: Running' || die "alias status: service not Running"
-out="$(dpi-proxy-ctl diagnose example.com 2>&1)"; echo "$out"
-echo "$out" | grep -q '^https:        HTTP [23]' || die "alias diagnose failed"
-pass "dpictl/dpi-proxy-ctl still work as aliases"
+stepn "one public command: no legacy aliases installed"
+for old in dpictl dpi-proxy-ctl; do
+	[ -e "/usr/local/bin/$old" ] && die "/usr/local/bin/$old is still installed"
+	command -v "$old" >/dev/null 2>&1 && die "$old is on the PATH"
+done
+pass "only nivyx is installed"
 
 stepn "restart keeps working"
-sudo dpictl restart >/dev/null || die "restart failed"
+sudo nivyx restart >/dev/null || die "restart failed"
 wait_running || die "not running after restart"
 c="$(fetch https://www.wikipedia.org/)"; ok "$c" || die "after restart -> '$c'"
 pass "after restart: HTTP $c (pid $(daemon_pid))"
 
 stepn "stop = ordinary networking, PF as before"
-sudo dpictl stop || die "stop failed"
+sudo nivyx stop || die "stop failed"
 [ -z "$(daemon_pid)" ] || die "still running"
 anchor_empty || die "rules or tables left in $ANCHOR after stop"
 sleep 1
@@ -307,7 +305,7 @@ dscacheutil -q host -a name example.com | grep -q '^ip_address:' || die "DNS bro
 pass "stopped: anchor empty, PF exactly as before, HTTPS $c, DNS OK"
 
 stepn "crash (SIGKILL of the daemon) = fail-open at once, then launchd restarts it"
-sudo dpictl start >/dev/null || die "start failed"
+sudo nivyx start >/dev/null || die "start failed"
 wait_running || die "not running after start"
 old="$(daemon_pid)"
 sudo kill -9 "$old"
@@ -357,14 +355,12 @@ stepn "uninstall leaves nothing behind"
 ( cd "$PKG" && sudo ./uninstall.sh ) || die "uninstall.sh failed"
 [ -e "/Library/LaunchDaemons/$LABEL.plist" ] && die "plist left"
 launchctl print "system/$LABEL" >/dev/null 2>&1 && die "launchd job left"
-for f in /usr/local/bin/dpi-proxy /usr/local/bin/nivyx /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl /usr/local/etc/dpi-proxy \
+for f in /usr/local/bin/dpi-proxy /usr/local/bin/nivyx /usr/local/etc/dpi-proxy \
 	/usr/local/var/dpi-proxy /var/run/dpi-proxy /var/log/dpi-proxy.log /var/log/dpi-proxy.stderr.log; do
 	[ -e "$f" ] && die "$f left"
 done
 # a new shell: this one still has the old location hashed
 /bin/sh -c 'command -v nivyx' >/dev/null && die "nivyx still on the PATH"
-/bin/sh -c 'command -v dpictl' >/dev/null && die "dpictl still on the PATH"
-/bin/sh -c 'command -v dpi-proxy-ctl' >/dev/null && die "dpi-proxy-ctl still on the PATH"
 pgrep -f '^/usr/local/bin/dpi-proxy' >/dev/null && die "a dpi-proxy process is left"
 anchor_empty || die "rules or tables left in $ANCHOR"
 sudo pfctl -s References 2>/dev/null | grep -q '[0-9]\{8,\}' && [ "$(sed -n 1p /tmp/dpi-e2e-pf-before.txt)" = Disabled ] \

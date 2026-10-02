@@ -10,7 +10,7 @@ install -m 755 "$ROOT/dpi-proxy" "$OUT/dpi-proxy"
 # Strip the packaged copy only (debug symbols, not needed at
 # runtime); the build tree's own dpi-proxy is untouched.
 strip "$OUT/dpi-proxy"
-for f in install.sh uninstall.sh "Install Nivyx.command" "Uninstall Nivyx.command" nivyx dpictl dpi-proxy-ctl; do
+for f in install.sh uninstall.sh "Install Nivyx.command" "Uninstall Nivyx.command" nivyx; do
 	install -m 755 "$ROOT/scripts/macos/$f" "$OUT/$f"
 done
 install -m 644 "$ROOT/scripts/macos/io.github.kadireren7.dpi-proxy.plist" "$OUT/"

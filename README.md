@@ -100,8 +100,7 @@ nivyx restart                # (root/Administrator)
 nivyx stop                   # (root/Administrator) until next start/boot
 ```
 
-`dpictl` and `dpi-proxy-ctl` still work with the same commands
-(compatibility aliases from earlier releases). Full reference,
+Full reference,
 including exactly what `doctor` checks and what `support-bundle`
 redacts: [docs/cli.md](docs/cli.md).
 

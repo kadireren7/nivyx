@@ -46,9 +46,6 @@ EVERYDAY COMMANDS
          nivyx start       (Administrator)
          nivyx restart     (Administrator)
 
-  dpictl and dpi-proxy-ctl still work with the same commands
-  (compatibility aliases for nivyx).
-
 UNINSTALL
   Double-click "Uninstall Nivyx.cmd" (in the install folder, normally
   %ProgramFiles%\dpi-proxy), or manually, PowerShell as Administrator:

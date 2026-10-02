@@ -15,7 +15,7 @@ typedef struct s_tp_options
 	int			debug;				/* per-connection log lines */
 	const char	*strategy_conf;		/* manual rules (strategy.conf) */
 	const char	*decisions_file;	/* learned decisions */
-	const char	*status_file;		/* for `dpi-proxy-ctl status` */
+	const char	*status_file;		/* for `nivyx status` */
 	const char	*log_file;			/* also log here (NULL: stderr only) */
 	const char	*dns_servers;		/* plain-DNS fallback: IP literals */
 	/* local DNS forwarder: 0 = don't intercept DNS at all */

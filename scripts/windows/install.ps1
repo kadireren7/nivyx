@@ -12,9 +12,7 @@
   Installs (and scripts\windows\uninstall.ps1 removes exactly that):
     %ProgramFiles%\dpi-proxy\   dpi-proxy.exe, WinDivert.dll,
                                 WinDivert64.sys, WinDivert-LICENSE.txt,
-                                nivyx.cmd (primary), dpictl.cmd,
-                                dpi-proxy-ctl.cmd (aliases),
-                                dpictl-impl.ps1, uninstall.ps1
+                                nivyx.cmd, nivyx-impl.ps1, uninstall.ps1
     %ProgramData%\dpi-proxy\    strategy.conf (kept on reinstall),
                                 learned decisions, status, log
     service "dpi-proxy"         automatic start, restart on failure
@@ -83,10 +81,16 @@ try {
     foreach ($f in 'WinDivert-LICENSE.txt') {
         if (Test-Path (Join-Path $from $f)) { Copy-Item (Join-Path $from $f) $InstDir -Force }
     }
-    foreach ($f in 'dpictl-impl.ps1', 'nivyx.cmd', 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'uninstall.ps1', 'Uninstall Nivyx.cmd') {
+    foreach ($f in 'nivyx-impl.ps1', 'nivyx.cmd', 'uninstall.ps1', 'Uninstall Nivyx.cmd') {
         $p = Join-Path $Src $f
         if (-not (Test-Path $p)) { $p = Join-Path $from "scripts\windows\$f" }
         Copy-Item $p $InstDir -Force
+    }
+    # Upgrade from v2.1 or earlier: the old command wrappers lived in our
+    # own install folder; nothing outside it is touched.
+    foreach ($old in 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'dpictl-impl.ps1') {
+        $p = Join-Path $InstDir $old
+        if (Test-Path $p) { Remove-Item $p -Force; Log "  removed legacy command file $old (use: nivyx)" }
     }
     $conf = Join-Path $DataDir 'strategy.conf'
     if (-not (Test-Path $conf)) {
@@ -157,7 +161,6 @@ Write-Host '  Doctor:     nivyx doctor'
 Write-Host '  Logs:       nivyx logs'
 Write-Host '  Stop:       nivyx stop          (networking keeps working, unbypassed)'
 Write-Host "  Uninstall:  powershell -ExecutionPolicy Bypass -File `"$InstDir\uninstall.ps1`""
-Write-Host '  (dpictl and dpi-proxy-ctl still work as aliases for nivyx)'
 if ($other) {
     Write-Host ''
     Write-Host '  WARNING: another WinDivert-based DPI tool is running' -ForegroundColor Yellow

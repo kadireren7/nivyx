@@ -35,14 +35,13 @@ sudo nivyx restart
 sudo nivyx stop              # until next start/boot
 ```
 
-`dpictl` and `dpi-proxy-ctl` still work with the same commands —
-compatibility aliases for `nivyx`. See [cli.md](cli.md) for the full
+See [cli.md](cli.md) for the full
 command reference (shared across platforms).
 
 Optional manual rules go in `/etc/dpi-proxy/strategy.conf` (e.g.
 `example.com = tlsrec`); none are needed.
 
-Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/nivyx` (+ `dpictl`, `dpi-proxy-ctl` aliases),
+Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/nivyx`,
 `/etc/dpi-proxy/strategy.conf`, `/var/lib/dpi-proxy/tp-decisions.conf`
 (learned decisions), status file and nftables table `inet
 dpi_proxy_tp`, systemd unit `dpi-proxy-transparent.service`. Logs go

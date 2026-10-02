@@ -58,7 +58,7 @@ fresh same-network cache entry → `default`. The `[flow] classified`
 log line says which one applied (`source=manual|auto-discovery|
 default`). The engine loads the cache at startup and re-reads both
 files on `SIGHUP` (`systemctl reload dpi-proxy-packet`, or
-`dpi-proxy-ctl reload`). `dpi-proxy-ctl probe`/`reprobe` stop the
+`nivyx reload`). `nivyx probe`/`reprobe` stop the
 service while probing (the probe's scoped engine uses the same
 nftables table and queue, and would otherwise delete the service's
 table) and start it again afterwards, which loads the new result.
@@ -82,8 +82,8 @@ Results are cached in `discovery-cache.conf` (default path: the
 current working directory, same as `strategy.conf`; override with
 `DPI_PROXY_DISCOVERY_CACHE` or `--discovery-cache PATH`). The systemd
 service uses `/etc/dpi-proxy/discovery-cache.conf`, and
-`dpi-proxy-ctl` always passes the service's own paths, so prefer
-`sudo dpi-proxy-ctl probe DOMAIN` over calling the binary from an
+`nivyx` always passes the service's own paths, so prefer
+`sudo nivyx probe DOMAIN` over calling the binary from an
 arbitrary directory. Entries are keyed by domain **and** a network
 fingerprint — see [docs/network-profiles.md](network-profiles.md) for
 exactly what feeds it (interface, link type, SSID, IPv4/IPv6

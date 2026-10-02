@@ -25,8 +25,7 @@ consumer hardware and networks. Field reports are welcome.
 4. Use Firefox, Chrome, Discord, … normally. No proxy arguments, no
    manual DNS changes, no per-app configuration.
 
-Everything needed is in the ZIP (`dpi-proxy.exe`, `nivyx.cmd` (+
-`dpictl.cmd`, `dpi-proxy-ctl.cmd` aliases), `Install Nivyx.cmd`,
+Everything needed is in the ZIP (`dpi-proxy.exe`, `nivyx.cmd`, `Install Nivyx.cmd`,
 `Uninstall Nivyx.cmd`, `install.ps1`, `uninstall.ps1`, the WinDivert
 driver files and license, `WINDOWS-QUICKSTART.txt`). No Visual Studio,
 MinGW, Git or Python; the installer puts `nivyx` on the PATH itself.
@@ -48,8 +47,7 @@ nivyx start                  # (Administrator)
 nivyx restart                # (Administrator)
 ```
 
-`dpictl` and `dpi-proxy-ctl` still work with the same commands —
-compatibility aliases for `nivyx`. See [cli.md](cli.md) for the full
+See [cli.md](cli.md) for the full
 command reference (shared across platforms).
 
 Files: `%ProgramFiles%\dpi-proxy` (program), `%ProgramData%\dpi-proxy`

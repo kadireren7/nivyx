@@ -82,14 +82,14 @@ sleep 3
 c="$(fetch https://example.com/)"; ok "$c" || die "after restart -> '$c'"
 pass "killed: fail-open, restarted, HTTPS $c"
 
-stepn "dpictl"
-dpictl status
-dpictl status --verbose
-dpictl diagnose example.com
-dpictl version | grep -q . || die "dpictl version printed nothing"
-dpictl doctor || die "dpictl doctor reported a failure while the service is healthy"
+stepn "nivyx commands"
+nivyx status
+nivyx status --verbose
+nivyx diagnose example.com
+nivyx version | grep -q . || die "nivyx version printed nothing"
+nivyx doctor || die "nivyx doctor reported a failure while the service is healthy"
 bundle="$(mktemp -u).tar.gz"
-dpictl support-bundle "$bundle" || die "support-bundle failed"
+nivyx support-bundle "$bundle" || die "support-bundle failed"
 [ -s "$bundle" ] || die "support-bundle produced an empty/missing archive"
 bundle_dir="$(mktemp -d)"
 tar -xzf "$bundle" -C "$bundle_dir"
@@ -109,9 +109,9 @@ if [ -f "$bundle_dir/dns-history-summary.txt" ]; then
 		|| die "support-bundle included raw DNS decision history instead of a summary"
 fi
 rm -rf "$bundle_dir" "$bundle"
-pass "dpictl status/doctor/support-bundle/version ran; archive redaction verified"
+pass "nivyx status/doctor/support-bundle/version ran; archive redaction verified"
 
-stepn "nivyx (primary CLI, v2.1+)"
+stepn "nivyx output"
 out="$(nivyx status)"; echo "$out"
 echo "$out" | grep -q '^Nivyx ' || die "nivyx status did not print the Nivyx version header"
 nivyx status --verbose
@@ -120,11 +120,12 @@ no_color_out="$(NO_COLOR=1 nivyx status)"
 if printf '%s' "$no_color_out" | grep -q "$(printf '\033')"; then die "NO_COLOR=1 but nivyx emitted a color escape code"; fi
 pass "nivyx status/--help ran; NO_COLOR honored"
 
-stepn "dpictl / dpi-proxy-ctl (compatibility aliases)"
-dpictl status
-dpi-proxy-ctl status
-dpi-proxy-ctl diagnose example.com
-pass "aliases still work"
+stepn "one public command: no legacy aliases installed"
+for old in dpictl dpi-proxy-ctl; do
+	[ -e "/usr/local/bin/$old" ] && die "/usr/local/bin/$old is still installed"
+	command -v "$old" >/dev/null 2>&1 && die "$old is still on the PATH"
+done
+pass "only nivyx is installed"
 
 stepn "size and resource use"
 ls -l /usr/local/bin/dpi-proxy
