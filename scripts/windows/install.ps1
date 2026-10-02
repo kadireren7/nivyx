@@ -12,9 +12,8 @@
   Installs (and scripts\windows\uninstall.ps1 removes exactly that):
     %ProgramFiles%\dpi-proxy\   dpi-proxy.exe, WinDivert.dll,
                                 WinDivert64.sys, WinDivert-LICENSE.txt,
-                                nivyx.cmd (primary), dpictl.cmd,
-                                dpi-proxy-ctl.cmd (aliases),
-                                dpictl-impl.ps1, uninstall.ps1
+                                nivyx.cmd, nivyx-impl.ps1, nivyx-completion.ps1,
+                                uninstall.ps1
     %ProgramData%\dpi-proxy\    strategy.conf (kept on reinstall),
                                 learned decisions, status, log
     service "dpi-proxy"         automatic start, restart on failure
@@ -63,9 +62,9 @@ foreach ($f in $need) {
 }
 
 Log '[1/6] Third-party component notice'
-Write-Host '  dpi-proxy uses the WinDivert driver (signed, LGPLv3/GPLv2,'
+Write-Host '  Nivyx uses the WinDivert driver (signed, LGPLv3/GPLv2,'
 Write-Host '  https://reqrypt.org/windivert.html) to redirect this machine''s own'
-Write-Host '  outgoing HTTPS and DNS to the local dpi-proxy service. It does not'
+Write-Host '  outgoing HTTPS and DNS to the local Nivyx service. It does not'
 Write-Host '  decrypt anything and does not send traffic to any remote server.'
 
 $installed = $false
@@ -76,17 +75,53 @@ try {
         & sc.exe delete $Service | Out-Null
         Start-Sleep -Seconds 1
     }
+    # The WinDivert driver stays loaded after our service stops and keeps
+    # WinDivert64.sys locked, which would make an upgrade fail halfway.
+    # Unload it unless another WinDivert-based tool is using it.
+    $wdSvc = Get-Service WinDivert -ErrorAction SilentlyContinue
+    if ($wdSvc -and $wdSvc.Status -ne 'Stopped' -and
+        -not (Get-Process -Name goodbyedpi, winws -ErrorAction SilentlyContinue)) {
+        & sc.exe stop WinDivert | Out-Null
+        foreach ($i in 1..20) {
+            if ((Get-Service WinDivert -ErrorAction SilentlyContinue).Status -eq 'Stopped') { break }
+            Start-Sleep -Milliseconds 500
+        }
+    }
 
     Log "[3/6] Installing files to $InstDir ..."
     New-Item -ItemType Directory -Force -Path $InstDir, $DataDir | Out-Null
-    foreach ($f in $need) { Copy-Item (Join-Path $from $f) $InstDir -Force }
+    # Files identical to what is already installed are not rewritten (the
+    # unmodified WinDivert files never change between releases, and a copy
+    # over a still-loaded driver would fail).
+    function Get-Sha256Of([string]$path) {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $fs = [System.IO.File]::OpenRead($path)
+        try { return [BitConverter]::ToString($sha.ComputeHash($fs)) } finally { $fs.Dispose(); $sha.Dispose() }
+    }
+    foreach ($f in $need) {
+        # (not $src/$dst: PowerShell names are case-insensitive and $Src is the script folder)
+        $fromFile = Join-Path $from $f
+        $toFile = Join-Path $InstDir $f
+        if ((Test-Path $toFile) -and ((Get-Sha256Of $fromFile) -eq (Get-Sha256Of $toFile))) { continue }
+        Copy-Item $fromFile $InstDir -Force
+    }
     foreach ($f in 'WinDivert-LICENSE.txt') {
         if (Test-Path (Join-Path $from $f)) { Copy-Item (Join-Path $from $f) $InstDir -Force }
     }
-    foreach ($f in 'dpictl-impl.ps1', 'nivyx.cmd', 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'uninstall.ps1', 'Uninstall Nivyx.cmd') {
+    foreach ($f in 'nivyx-impl.ps1', 'nivyx.cmd', 'uninstall.ps1', 'Uninstall Nivyx.cmd') {
         $p = Join-Path $Src $f
         if (-not (Test-Path $p)) { $p = Join-Path $from "scripts\windows\$f" }
         Copy-Item $p $InstDir -Force
+    }
+    # optional PowerShell tab completion (package: nivyx-completion.ps1; source tree: scripts\completions\nivyx.ps1)
+    foreach ($c in (Join-Path $Src 'nivyx-completion.ps1'), (Join-Path $from 'scripts\completions\nivyx.ps1')) {
+        if (Test-Path $c) { Copy-Item $c (Join-Path $InstDir 'nivyx-completion.ps1') -Force; break }
+    }
+    # Upgrade from v2.1 or earlier: the old command wrappers lived in our
+    # own install folder; nothing outside it is touched.
+    foreach ($old in 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'dpictl-impl.ps1') {
+        $p = Join-Path $InstDir $old
+        if (Test-Path $p) { Remove-Item $p -Force; Log "  removed legacy command file $old (use: nivyx)" }
     }
     $conf = Join-Path $DataDir 'strategy.conf'
     if (-not (Test-Path $conf)) {
@@ -157,7 +192,6 @@ Write-Host '  Doctor:     nivyx doctor'
 Write-Host '  Logs:       nivyx logs'
 Write-Host '  Stop:       nivyx stop          (networking keeps working, unbypassed)'
 Write-Host "  Uninstall:  powershell -ExecutionPolicy Bypass -File `"$InstDir\uninstall.ps1`""
-Write-Host '  (dpictl and dpi-proxy-ctl still work as aliases for nivyx)'
 if ($other) {
     Write-Host ''
     Write-Host '  WARNING: another WinDivert-based DPI tool is running' -ForegroundColor Yellow

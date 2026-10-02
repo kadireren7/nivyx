@@ -24,8 +24,6 @@ TP_TABLE="dpi_proxy_tp"
 BIN_DEST="/usr/local/bin/dpi-proxy"
 PACKET_BIN_DEST="/usr/local/bin/dpi-proxy-packet"
 NIVYX_DEST="/usr/local/bin/nivyx"
-DPICTL_DEST="/usr/local/bin/dpictl"
-CTL_DEST="/usr/local/bin/dpi-proxy-ctl"
 UNIT_DIR="/etc/systemd/system"
 CONF_DIR="/etc/dpi-proxy"
 CONF_DEST="$CONF_DIR/strategy.conf"
@@ -120,11 +118,26 @@ run_as_build_user make all || { err "build failed — see output above"; exit 3;
 "$PROJECT_ROOT/dpi-proxy" --capabilities | grep -q '^transparent_mode: supported' \
 	|| { err "built binary has no transparent mode"; exit 3; }
 
-log "[3/7] Stopping running dpi-proxy services for a clean (re)install..."
+# Upgrade from v2.1 or earlier: the old public command names are gone.
+# Remove ONLY our own leftovers - a regular file that is a Nivyx/dpi-proxy
+# script - never an unrelated tool that happens to share the name.
+remove_legacy_cli() {
+	for legacy in /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl; do
+		[ -f "$legacy" ] && [ ! -L "$legacy" ] || continue
+		if [ "$(wc -c <"$legacy")" -lt 200000 ] && grep -q 'dpi-proxy' "$legacy" 2>/dev/null; then
+			rm -f "$legacy"
+			log "  removed legacy command $legacy (use: nivyx)"
+		else
+			log "  leaving $legacy alone (not a Nivyx file)"
+		fi
+	done
+}
+
+log "[3/7] Stopping running Nivyx services for a clean (re)install..."
 systemctl stop "$TP_SERVICE" >/dev/null 2>&1 || true
 # Two engines on TCP/443 at once is never intended: transparent mode
 # replaces packet mode as the automatic engine. Packet mode stays
-# installed and can be started by hand (dpi-proxy-ctl packet start).
+# installed and can be started by hand (nivyx packet start).
 if systemctl is-enabled --quiet "$PACKET_SERVICE" 2>/dev/null \
 	|| systemctl is-active --quiet "$PACKET_SERVICE" 2>/dev/null; then
 	log "  stopping and disabling $PACKET_SERVICE (transparent mode replaces it)"
@@ -140,7 +153,7 @@ if nft list table ip dpibypass >/dev/null 2>&1 \
 	OTHER_ACTIVE=1
 	echo
 	err "the dpi-bypass service is active. Two transparent DPI tools at once"
-	err "proxy each other's traffic and break connections. dpi-proxy is"
+	err "proxy each other's traffic and break connections. Nivyx is"
 	err "installed anyway, but stop one of them:"
 	err "  sudo systemctl stop dpi-bypass            (until reboot)"
 	err "  sudo systemctl disable --now dpi-bypass   (permanently)"
@@ -152,9 +165,14 @@ install -m 0755 "$PROJECT_ROOT/dpi-proxy" "$BIN_DEST"
 # Strip the installed copy only — the source tree's own dpi-proxy
 # keeps its symbols for local debugging (make re rebuilds it anyway).
 command -v strip >/dev/null 2>&1 && strip "$BIN_DEST" 2>/dev/null || true
-install -m 0755 "$PROJECT_ROOT/scripts/dpictl" "$DPICTL_DEST"
-install -m 0755 "$PROJECT_ROOT/scripts/dpi-proxy-ctl" "$CTL_DEST"
-install -m 0755 "$PROJECT_ROOT/scripts/dpictl" "$NIVYX_DEST"
+install -m 0755 "$PROJECT_ROOT/scripts/nivyx" "$NIVYX_DEST"
+remove_legacy_cli
+# man page and shell completions (best effort; harmless if the shell is absent)
+install -d /usr/local/share/man/man1
+install -m 0644 "$PROJECT_ROOT/scripts/nivyx.1" /usr/local/share/man/man1/nivyx.1
+install -D -m 0644 "$PROJECT_ROOT/scripts/completions/nivyx.bash" /usr/share/bash-completion/completions/nivyx
+install -D -m 0644 "$PROJECT_ROOT/scripts/completions/_nivyx" /usr/local/share/zsh/site-functions/_nivyx
+install -D -m 0644 "$PROJECT_ROOT/scripts/completions/nivyx.fish" /usr/share/fish/vendor_completions.d/nivyx.fish
 if [ "$WITH_PACKET" = 1 ]; then
 	install -m 0755 "$PROJECT_ROOT/dpi-proxy-packet" "$PACKET_BIN_DEST"
 fi
@@ -221,7 +239,7 @@ fi
 
 INSTALL_OK=1
 echo
-log "Done. Transparent mode is running and enabled at boot."
+log "Done. Nivyx is running and enabled at boot."
 echo
 echo "  HTTPS from all applications now goes through the automatic bypass,"
 echo "  and DNS is answered over DNS-over-HTTPS (no poisoned answers);"
@@ -238,4 +256,3 @@ echo "  Logs:       nivyx logs"
 echo "  Stop:       sudo nivyx stop             (internet keeps working, unbypassed)"
 echo "  Uninstall:  sudo ./scripts/uninstall.sh"
 echo "  Config:     $CONF_DEST (optional manual rules)"
-echo "  (dpictl and dpi-proxy-ctl still work as aliases for nivyx)"

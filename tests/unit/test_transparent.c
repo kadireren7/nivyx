@@ -574,6 +574,18 @@ static void	test_nft_ruleset(void)
 	assert(strstr(buf, "quic_block4 { 162.159.128.233 timeout 3600s }"));
 	len = tp_nft_quic_block(buf, sizeof(buf), 6, "2606:4700::1");
 	assert(strstr(buf, "quic_block6 { 2606:4700::1 timeout 3600s }"));
+	/* QUIC decisions are per address and always expire (CDN addresses
+	 * are reused by unrelated sites): the element timeout is the shared
+	 * constant, bounded to at most a few hours, never "forever" */
+	{
+		char	expect[64];
+
+		snprintf(expect, sizeof(expect), "timeout %ds }",
+			TP_QUIC_BLOCK_TIMEOUT_S);
+		assert(strstr(buf, expect) != NULL);
+		assert(TP_QUIC_BLOCK_TIMEOUT_S > 0
+			&& TP_QUIC_BLOCK_TIMEOUT_S <= 6 * 3600);
+	}
 }
 
 /* ---- PF anchor text (macOS) ---- */

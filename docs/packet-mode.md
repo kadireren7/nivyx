@@ -161,9 +161,9 @@ dpi-proxy-packet [--config PATH] [--discovery-cache PATH]
                   [--capabilities] [--version] [--help]
 ```
 
-`scripts/dpi-proxy-ctl` wraps the most common of these (plus
+`scripts/nivyx` wraps the most common of these (plus
 `systemctl`/`journalctl`) behind short subcommands —
-`dpi-proxy-ctl status|start|stop|restart|probe|strategy|networks|logs`
+`nivyx status|start|stop|restart|probe|strategy|networks|logs`
 — see the README's "Lightweight CLI control" section. Every flag below
 keeps working directly regardless.
 

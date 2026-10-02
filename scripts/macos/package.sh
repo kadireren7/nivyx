@@ -10,11 +10,13 @@ install -m 755 "$ROOT/dpi-proxy" "$OUT/dpi-proxy"
 # Strip the packaged copy only (debug symbols, not needed at
 # runtime); the build tree's own dpi-proxy is untouched.
 strip "$OUT/dpi-proxy"
-for f in install.sh uninstall.sh "Install Nivyx.command" "Uninstall Nivyx.command" nivyx dpictl dpi-proxy-ctl; do
+for f in install.sh uninstall.sh "Install Nivyx.command" "Uninstall Nivyx.command" nivyx; do
 	install -m 755 "$ROOT/scripts/macos/$f" "$OUT/$f"
 done
 install -m 644 "$ROOT/scripts/macos/io.github.kadireren7.dpi-proxy.plist" "$OUT/"
 install -m 644 "$ROOT/scripts/macos/MACOS-QUICKSTART.txt" "$OUT/"
+install -m 644 "$ROOT/scripts/nivyx.1" "$OUT/nivyx.1"
+install -m 644 "$ROOT/scripts/completions/_nivyx" "$OUT/_nivyx"
 install -m 644 "$ROOT/LICENSE" "$OUT/LICENSE"
 # what the binary needs at run time: macOS system libraries only
 if otool -L "$OUT/dpi-proxy" | tail -n +2 | grep -v -e '^[[:space:]]*/usr/lib/' -e '^[[:space:]]*/System/'; then

@@ -42,12 +42,14 @@ EVERYDAY COMMANDS
          nivyx status
          nivyx status --verbose
          nivyx doctor
+         nivyx diagnose discord.com
+         nivyx stats
+         nivyx repair      (Administrator; fixes Nivyx's own state)
+         nivyx update      (Administrator; verified, with rollback)
+         nivyx help
          nivyx stop       (Administrator; normal internet, no bypass)
          nivyx start       (Administrator)
          nivyx restart     (Administrator)
-
-  dpictl and dpi-proxy-ctl still work with the same commands
-  (compatibility aliases for nivyx).
 
 UNINSTALL
   Double-click "Uninstall Nivyx.cmd" (in the install folder, normally

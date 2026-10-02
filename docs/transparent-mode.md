@@ -104,8 +104,6 @@ sudo nivyx restart
 sudo nivyx stop       # internet keeps working, unbypassed
 ```
 
-(`dpictl` and `dpi-proxy-ctl` are compatibility aliases for `nivyx`.)
-
 On Linux, logs go to the journal (`journalctl -u dpi-proxy-transparent`);
 `DPI_PROXY_LOG_LEVEL=debug` logs every connection attempt. Learned
 decisions live in `/var/lib/dpi-proxy/tp-decisions.conf`.
@@ -147,7 +145,7 @@ port 1053.
 - A Windows Firewall rule (`dpi-proxy`, inbound, this program only) lets
   the reflected connections reach the service.
 - Logs: `%ProgramData%\dpi-proxy\dpi-proxy.log` (rotated at 4 MB);
-  `dpi-proxy-ctl logs`.
+  `nivyx logs`.
 
 ## macOS
 
@@ -227,12 +225,12 @@ link-local) takes the same path to the forwarder on port 1053.
   routing socket; the rules are interface-independent, so they keep
   working on any new interface. The network profile is the default
   route's interface, gateway and gateway MAC address.
-- Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/dpi-proxy-ctl`,
+- Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/nivyx`,
   `/Library/LaunchDaemons/io.github.kadireren7.dpi-proxy.plist`,
   `/usr/local/etc/dpi-proxy/strategy.conf`,
   `/usr/local/var/dpi-proxy/tp-decisions.conf`, the status file and PF
   reference token in `/var/run/dpi-proxy/`, log
-  `/var/log/dpi-proxy.log` (rotated at 4 MB; `dpi-proxy-ctl logs`).
+  `/var/log/dpi-proxy.log` (rotated at 4 MB; `nivyx logs`).
   `sudo ./uninstall.sh` removes all of them.
 
 ## Limitations
@@ -243,6 +241,14 @@ link-local) takes the same path to the forwarder on port 1053.
 - Only one transparent interceptor can run at a time. If another DPI
   tool with its own nftables redirects (for example the `dpi-bypass`
   service) is active, the daemon logs a `[conflict]` warning and
-  `dpi-proxy-ctl status` shows it; stop one of them.
+  `nivyx status` shows it; stop one of them.
 - Blocking by IP address, or DPI that reassembles TLS records, cannot
   be bypassed this way.
+- **Linux and Windows: names only the router answers.** The forwarder
+  cannot tell which server a redirected query was meant for there (that
+  is macOS-only), so LAN names such as `printer.lan` get the DoH answer
+  (NXDOMAIN); put them in the hosts file. For a captive portal, run
+  `nivyx stop`, log in, then `nivyx start`. Details:
+  [audit-v2.2.md](audit-v2.2.md).
+- **IPv6** is covered by unit tests and field use, but CI runners have
+  no IPv6 connectivity, so it is not exercised end to end in CI.

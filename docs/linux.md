@@ -31,18 +31,21 @@ nivyx diagnose discord.com  # DNS + HTTPS check for one site
 nivyx logs 50
 nivyx support-bundle        # local diagnostics archive, redacted, no telemetry
 nivyx strategy discord.com  # what applies to a site right now
+nivyx stats                 # local counters (no browsing history)
+nivyx config check          # validate manual rules (config set/unset/show/path)
+sudo nivyx repair           # fix Nivyx-owned state (service, stale nft table, files)
+sudo nivyx update           # verified update with automatic rollback (--check: look only)
 sudo nivyx restart
 sudo nivyx stop              # until next start/boot
 ```
 
-`dpictl` and `dpi-proxy-ctl` still work with the same commands —
-compatibility aliases for `nivyx`. See [cli.md](cli.md) for the full
+See [cli.md](cli.md) for the full
 command reference (shared across platforms).
 
 Optional manual rules go in `/etc/dpi-proxy/strategy.conf` (e.g.
 `example.com = tlsrec`); none are needed.
 
-Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/nivyx` (+ `dpictl`, `dpi-proxy-ctl` aliases),
+Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/nivyx`,
 `/etc/dpi-proxy/strategy.conf`, `/var/lib/dpi-proxy/tp-decisions.conf`
 (learned decisions), status file and nftables table `inet
 dpi_proxy_tp`, systemd unit `dpi-proxy-transparent.service`. Logs go

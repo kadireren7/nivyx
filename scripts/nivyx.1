@@ -1,0 +1,60 @@
+.TH NIVYX 1 "" "Nivyx" "User Commands"
+.SH NAME
+nivyx \- control the Nivyx system-wide DPI bypass service
+.SH SYNOPSIS
+.B nivyx
+.I command
+[options]
+.SH DESCRIPTION
+Nivyx runs as a system service that bypasses DPI-based blocking of HTTPS for
+all applications and answers DNS over HTTPS. The
+.B nivyx
+command is its only public interface; everything below works the same on
+Linux, macOS and Windows.
+.SH COMMANDS
+.TP
+.B status [--verbose]
+Short summary: version, service, protection, DNS, mode.
+.TP
+.B doctor
+Read-only health checks. Exit status 1 if a check failed.
+.TP
+.B diagnose \fIDOMAIN\fR [--verbose]
+Explain DNS, HTTPS and the stored decision for one site.
+.TP
+.B stats
+Local counters. No host names are shown or stored.
+.TP
+.B logs [\fIN\fR]
+Recent log lines.
+.TP
+.B start | stop | restart | reload
+Control the service (root). Stopping restores normal networking.
+.TP
+.B repair
+Fix Nivyx-owned state only (root). Every repair is printed.
+.TP
+.B update [--check]
+Check for, or install, the latest official release. The download is verified
+against SHA256SUMS; a failed health check restores the previous version.
+.TP
+.B config show | path | check | set \fIDOMAIN STRATEGY\fR | unset \fIDOMAIN\fR
+Inspect or change manual rules. Manual rules override automatic learning.
+.TP
+.B strategy \fIDOMAIN\fR
+Which rule applies to a domain right now.
+.TP
+.B support-bundle [\fIFILE\fR]
+Write a redacted diagnostics archive locally. Nothing is sent anywhere.
+.TP
+.B version
+Print the version.
+.TP
+.B help [\fICOMMAND\fR]
+Show help.
+.SH FILES
+.TP
+.I /etc/dpi-proxy/strategy.conf
+Manual rules (Linux). macOS: /usr/local/etc/dpi-proxy/strategy.conf.
+.SH SEE ALSO
+https://github.com/kadireren7/nivyx

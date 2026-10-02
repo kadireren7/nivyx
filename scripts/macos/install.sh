@@ -5,7 +5,7 @@
 #   sudo ./install.sh
 #
 # Run it from the extracted package folder. Installs
-#   /usr/local/bin/dpi-proxy, /usr/local/bin/nivyx (+ dpictl, dpi-proxy-ctl aliases)
+#   /usr/local/bin/dpi-proxy, /usr/local/bin/nivyx 
 #   /Library/LaunchDaemons/io.github.kadireren7.dpi-proxy.plist
 #   /usr/local/etc/dpi-proxy/strategy.conf  (kept if it exists)
 # starts the service and checks DNS and HTTPS through it. If that check
@@ -30,7 +30,7 @@ die() { fail "$1"; exit 1; }
 
 [ "$(uname -s)" = Darwin ] || die "this installer is for macOS"
 [ "$(id -u)" -eq 0 ] || die "run it with sudo:  sudo ./install.sh"
-for f in dpi-proxy dpictl dpi-proxy-ctl nivyx "$LABEL.plist"; do
+for f in dpi-proxy nivyx "$LABEL.plist"; do
 	[ -f "$HERE/$f" ] || die "$f is missing next to install.sh (extract the whole package)"
 done
 
@@ -40,10 +40,10 @@ xattr -dr com.apple.quarantine "$HERE" 2>/dev/null || true
 
 log "[1/5] Checking the package..."
 if ! "$HERE/dpi-proxy" --version >/dev/null 2>&1; then
-	die "dpi-proxy does not run on this Mac ($(uname -m), macOS $(sw_vers -productVersion)); is this the package for this Mac's processor?"
+	die "Nivyx does not run on this Mac ($(uname -m), macOS $(sw_vers -productVersion)); is this the package for this Mac's processor?"
 fi
 "$HERE/dpi-proxy" --capabilities | grep -q '^transparent_mode: supported' \
-	|| die "this dpi-proxy binary was built without transparent mode"
+	|| die "this Nivyx engine was built without transparent mode"
 echo "    $("$HERE/dpi-proxy" --version), macOS $(sw_vers -productVersion), $(uname -m)"
 for p in tpws spoofdpi ciadpi byedpi; do
 	if pgrep -x "$p" >/dev/null 2>&1; then
@@ -78,16 +78,32 @@ if [ -n "$created" ]; then
 	for d in $created; do echo "$d"; done >>"$VAR_DIR/created-dirs"
 fi
 install -m 755 -o root -g wheel "$HERE/dpi-proxy" "$BIN_DIR/dpi-proxy"
-install -m 755 -o root -g wheel "$HERE/dpictl" "$BIN_DIR/dpictl"
-install -m 755 -o root -g wheel "$HERE/dpi-proxy-ctl" "$BIN_DIR/dpi-proxy-ctl"
-install -m 755 -o root -g wheel "$HERE/dpictl" "$BIN_DIR/nivyx"
+install -m 755 -o root -g wheel "$HERE/nivyx" "$BIN_DIR/nivyx"
+# man page and zsh completion (best effort)
+if [ -f "$HERE/nivyx.1" ]; then
+	install -d /usr/local/share/man/man1
+	install -m 644 "$HERE/nivyx.1" /usr/local/share/man/man1/nivyx.1
+fi
+if [ -f "$HERE/_nivyx" ]; then
+	install -d /usr/local/share/zsh/site-functions
+	install -m 644 "$HERE/_nivyx" /usr/local/share/zsh/site-functions/_nivyx
+fi
+# Upgrade from v2.1 or earlier: drop our own old command names, never an
+# unrelated tool that shares the name.
+for legacy in "$BIN_DIR/dpictl" "$BIN_DIR/dpi-proxy-ctl"; do
+	[ -f "$legacy" ] && [ ! -L "$legacy" ] || continue
+	if [ "$(wc -c <"$legacy")" -lt 200000 ] && grep -q 'dpi-proxy' "$legacy" 2>/dev/null; then
+		rm -f "$legacy"
+		log "removed legacy command $legacy (use: nivyx)"
+	fi
+done
 if [ ! -f "$ETC_DIR/strategy.conf" ]; then
 	cat >"$ETC_DIR/strategy.conf" <<'CONF'
 # dpi-proxy manual rules. Transparent mode needs none: known-blocked
 # hosts (Discord and a few others, built in) get the bypass straight
 # away; any other host is tried directly first and learns a bypass only
 # if it needs one. Stream strategies: pass | tlsrec | tlsrec-split
-# After editing: sudo dpi-proxy-ctl reload
+# After editing: sudo nivyx reload
 #
 # [domains]
 # example.com = tlsrec
@@ -143,16 +159,15 @@ if [ $healthy -ne 1 ]; then
 fi
 
 echo
-log "Done. dpi-proxy is running and starts automatically at boot."
+log "Done. Nivyx is running and starts automatically at boot."
 echo "    HTTPS and DNS from all applications now go through the automatic"
 echo "    bypass; no proxy settings, no DNS changes, no per-app setup."
 echo
-echo "    Status:     dpictl status"
-echo "    Doctor:     dpictl doctor"
-echo "    Problems:   dpictl diagnose discord.com   and   dpictl logs"
-echo "    Stop:       sudo dpictl stop     (networking keeps working, unbypassed)"
+echo "    Status:     nivyx status"
+echo "    Doctor:     nivyx doctor"
+echo "    Problems:   nivyx diagnose discord.com   and   nivyx logs"
+echo "    Stop:       sudo nivyx stop     (networking keeps working, unbypassed)"
 echo "    Uninstall:  sudo ./uninstall.sh         (in this folder)"
-echo "    (dpi-proxy-ctl still works as an alias for dpictl)"
 c="$(field conflict)"
 if [ -n "$c" ] && [ "$c" != none ]; then
 	echo

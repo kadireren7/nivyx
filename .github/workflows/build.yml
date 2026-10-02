@@ -5,11 +5,15 @@ on:
   pull_request:
   workflow_dispatch:
 
+# least privilege: CI only reads the repository
+permissions:
+  contents: read
+
 jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # transparent mode's DNS-over-HTTPS resolver links OpenSSL
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - run: make re
@@ -25,11 +29,19 @@ jobs:
           ./dpi-proxy --version
           ./dpi-proxy --capabilities
           ./dpi-proxy --help >/dev/null
+      - name: cross-platform command parity (static)
+        run: ./scripts/parity-test.sh
+      - name: support-bundle redaction
+        run: ./scripts/redaction-test.sh
+      - name: Linux update package
+        run: |
+          ./scripts/package-linux.sh linux-pkg
+          tar -tzf linux-pkg/nivyx-linux-x86_64.tar.gz
 
   sanitize:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: make sanitize
 
   packet-mode-compile:
@@ -43,7 +55,7 @@ jobs:
     # live runs use scripts/field-test-linux.sh on a real machine.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: sudo apt-get update && sudo apt-get install -y libnetfilter-queue-dev nftables
       - run: make packet-mode
       - name: capability report (read-only, no privileged action taken)
@@ -59,7 +71,7 @@ jobs:
     # in one workspace, which is what exposes the bug if it recurs.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: sudo apt-get update && sudo apt-get install -y libnetfilter-queue-dev nftables
       - run: make sanitize
       - run: make packet-mode
@@ -78,9 +90,9 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: '11.0'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: echo "SSL=$RUNNER_TEMP/openssl-${{ matrix.arch }}" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/openssl-${{ matrix.arch }}
           key: openssl-3.5.8-${{ matrix.arch }}-macos11-v1
@@ -111,7 +123,7 @@ jobs:
         run: |
           ./scripts/macos/package.sh nivyx-macos-${{ matrix.arch }}
           ditto -c -k --keepParent nivyx-macos-${{ matrix.arch }} nivyx-macos-${{ matrix.arch }}.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nivyx-macos-${{ matrix.arch }}
           path: nivyx-macos-${{ matrix.arch }}.zip
@@ -131,8 +143,8 @@ jobs:
           - { runner: macos-15-intel, arch: x86_64 }
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: nivyx-macos-${{ matrix.arch }}
       - name: extract (as a tester would)
@@ -148,7 +160,7 @@ jobs:
     # cycle of transparent mode (the runner has sudo and nftables).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev nftables
       - run: ./scripts/e2e-test-linux.sh
 
@@ -158,8 +170,8 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
-      - uses: msys2/setup-msys2@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: MINGW64
           install: >-
@@ -185,7 +197,74 @@ jobs:
         run: ./scripts/windows/e2e-test.ps1 -Package dist
       # the exact folder that was just tested, for trying it on a real
       # machine before a release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nivyx-windows-x86_64
           path: dist
+
+  linux-upgrade:
+    # v2.1.0 (the real tagged source, installed with its own installer)
+    # upgraded in place by this tree's installer.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - run: git fetch --tags --force
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev nftables
+      - run: ./scripts/upgrade-test-linux.sh v2.1.0
+
+  macos-upgrade:
+    # the real v2.1.0 release ZIP (checksum-verified) upgraded in place by
+    # the package built from this tree
+    needs: macos
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, arch: arm64 }
+          - { runner: macos-15-intel, arch: x86_64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: nivyx-macos-${{ matrix.arch }}
+      - name: candidate and v2.1.0 packages
+        run: |
+          mkdir -p "$RUNNER_TEMP/new" "$RUNNER_TEMP/old"
+          ditto -x -k nivyx-macos-${{ matrix.arch }}.zip "$RUNNER_TEMP/new"
+          cd "$RUNNER_TEMP/old"
+          base=https://github.com/kadireren7/nivyx/releases/download/v2.1.0
+          curl -fsSL -O "$base/nivyx-macos-${{ matrix.arch }}.zip" -O "$base/SHA256SUMS"
+          grep " nivyx-macos-${{ matrix.arch }}.zip\$" SHA256SUMS | shasum -a 256 -c -
+          ditto -x -k nivyx-macos-${{ matrix.arch }}.zip .
+          ls
+      - name: upgrade v2.1.0 -> candidate (PF, launchd, root)
+        run: ./scripts/macos/upgrade-test.sh "$RUNNER_TEMP/old/nivyx-macos-${{ matrix.arch }}" "$RUNNER_TEMP/new/nivyx-macos-${{ matrix.arch }}"
+
+  windows-upgrade:
+    # the real v2.1.0 release ZIP (checksum-verified) upgraded in place by
+    # the package built from this tree, with real WinDivert
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: nivyx-windows-x86_64
+          path: candidate
+      - name: v2.1.0 package
+        shell: pwsh
+        run: |
+          $base = 'https://github.com/kadireren7/nivyx/releases/download/v2.1.0'
+          Invoke-WebRequest "$base/nivyx-windows-x86_64.zip" -OutFile old.zip
+          Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
+          $want = (Select-String -Path SHA256SUMS -Pattern 'nivyx-windows-x86_64.zip').Line.Split(' ')[0].ToLower()
+          $got = (Get-FileHash old.zip -Algorithm SHA256).Hash.ToLower()
+          if ($want -ne $got) { throw "v2.1.0 zip checksum mismatch" }
+          Expand-Archive old.zip -DestinationPath old
+          Get-ChildItem old
+      - name: upgrade v2.1.0 -> candidate (real WinDivert, Administrator)
+        shell: pwsh
+        run: ./scripts/windows/upgrade-test.ps1 -OldPackage old/nivyx-windows-x86_64 -NewPackage candidate

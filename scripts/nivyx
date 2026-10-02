@@ -1,1 +1,1279 @@
-dpictl
+#!/usr/bin/env bash
+#
+# nivyx — control CLI for the Nivyx transparent-mode service (Linux).
+# This one file is the whole implementation. Internal
+# service/table names (dpi-proxy-transparent, dpi-proxy-packet,
+# dpi_proxy_tp, dpi_proxy, /etc/dpi-proxy, ...) are kept unchanged from
+# pre-rebrand installs — only user-facing output and command names
+# change here.
+#
+# Zero runtime dependencies beyond what the services already need:
+# plain bash around systemctl/journalctl/nft and the installed
+# binaries. systemd stays the source of truth for service state.
+#
+# Transparent mode (dpi-proxy-transparent.service) is the default
+# engine on Linux: start/stop/restart/reload/status/logs act on it.
+# Packet mode (dpi-proxy-packet.service) keeps its own commands:
+# probe/reprobe/networks and `packet <start|stop|restart|status|logs>`.
+#
+# Normal use needs none of the diagnostic commands — the transparent
+# engine learns what each host needs by itself.
+
+set -euo pipefail
+
+TP_SERVICE="dpi-proxy-transparent"
+PACKET_SERVICE="dpi-proxy-packet"
+TP_TABLE="dpi_proxy_tp"
+PACKET_TABLE="dpi_proxy"
+
+# Used only in usage/error examples.
+SELF="nivyx"
+
+# Color: only to a real terminal, and never when NO_COLOR is set
+# (https://no-color.org) — piped/redirected output (support-bundle,
+# logs, scripts) stays plain automatically since it is never a tty.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+	C_GREEN="$(printf '\033[32m')"
+	C_YELLOW="$(printf '\033[33m')"
+	C_RED="$(printf '\033[31m')"
+	C_CYAN="$(printf '\033[36m')"
+	C_DIM="$(printf '\033[2m')"
+	C_RESET="$(printf '\033[0m')"
+else
+	C_GREEN=""; C_YELLOW=""; C_RED=""; C_CYAN=""; C_DIM=""; C_RESET=""
+fi
+
+err() { printf '%s: %s\n' "$SELF" "$1" >&2; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Value of KEY in a unit's Environment= lines, or FALLBACK. An explicit
+# DPI_PROXY_* in the caller's environment still wins (callers apply
+# that with ${VAR:-...}). The unit is queried once per run, not once
+# per key (each systemctl call is a process launch).
+# (Primed in the main shell below: each caller is a command substitution,
+# whose changes to a cache would be lost.)
+TP_ENV_RAW=""
+if have systemctl; then
+	TP_ENV_RAW="$(systemctl show -p Environment --value dpi-proxy-transparent 2>/dev/null | tr ' ' '\n')" || TP_ENV_RAW=""
+fi
+service_env() {
+	local unit="$1" key="$2" fallback="$3" val="" raw=""
+	if [ "$unit" = dpi-proxy-transparent ]; then
+		raw="$TP_ENV_RAW"
+	elif have systemctl; then
+		raw="$(systemctl show -p Environment --value "$unit" 2>/dev/null | tr ' ' '\n')"
+	fi
+	val="$(printf '%s\n' "$raw" | sed -n "s/^${key}=//p" | tail -n 1)"
+	printf '%s' "${val:-$fallback}"
+}
+
+TP_STATUS_FILE="${DPI_PROXY_TP_STATUS:-$(service_env "$TP_SERVICE" DPI_PROXY_TP_STATUS /run/dpi-proxy/transparent.status)}"
+TP_DECISIONS="${DPI_PROXY_TP_DECISIONS:-$(service_env "$TP_SERVICE" DPI_PROXY_TP_DECISIONS /var/lib/dpi-proxy/tp-decisions.conf)}"
+STRATEGY_CONF="${DPI_PROXY_STRATEGY_CONF:-$(service_env "$TP_SERVICE" DPI_PROXY_STRATEGY_CONF /etc/dpi-proxy/strategy.conf)}"
+
+# The system-service binary (/usr/local/bin/dpi-proxy, installed by
+# scripts/install.sh) takes priority over whatever "dpi-proxy" a user's
+# PATH happens to resolve first (e.g. a plain SOCKS5-only dev build in
+# ~/.local/bin) — nivyx reports on the installed service, not on an
+# arbitrary same-named binary earlier in PATH.
+find_binary() {
+	if [ -x /usr/local/bin/dpi-proxy ]; then
+		echo /usr/local/bin/dpi-proxy
+	elif have dpi-proxy; then
+		command -v dpi-proxy
+	else
+		return 1
+	fi
+}
+
+find_packet_binary() {
+	if [ -x /usr/local/bin/dpi-proxy-packet ]; then
+		echo /usr/local/bin/dpi-proxy-packet
+	elif have dpi-proxy-packet; then
+		command -v dpi-proxy-packet
+	else
+		return 1
+	fi
+}
+
+need_systemctl() { have systemctl || { err "systemctl not found"; exit 1; }; }
+
+# Pure bash (no sed/head launches): status prints a dozen fields.
+status_field() {
+	local line key="$1: "
+	[ -r "$TP_STATUS_FILE" ] || return 0
+	while IFS= read -r line; do
+		case "$line" in
+		"$key"*) printf '%s\n' "${line#"$key"}"; return 0 ;;
+		esac
+	done < "$TP_STATUS_FILE"
+	return 0
+}
+
+version_string() {
+	local bin
+	if bin="$(find_binary)"; then
+		"$bin" --version 2>/dev/null | sed -n 's/^dpi-proxy //p'
+	fi
+}
+
+# Compact, human-first summary (the default). Full internals: --verbose.
+status_short() {
+	local ver svc engine table protection dns_state fails bypassed
+	ver="$(version_string)"
+	echo "${C_CYAN}Nivyx ${ver:-(version unknown — engine not found)}${C_RESET}"
+
+	svc="inactive"
+	have systemctl && svc="$(systemctl is-active "$TP_SERVICE" 2>/dev/null || true)"
+	if [ "$svc" = active ]; then
+		echo "Service: ${C_GREEN}Running${C_RESET}"
+	elif [ "$svc" = failed ]; then
+		echo "Service: ${C_RED}Failed${C_RESET}"
+	else
+		echo "Service: ${C_YELLOW}Stopped${C_RESET}"
+		echo "Protection: ${C_DIM}Inactive${C_RESET}"
+		echo "DNS: N/A"
+		echo "Mode: N/A"
+		echo "Bypassed: 0"
+		echo "Failures: 0"
+		return 0
+	fi
+
+	engine="$(status_field engine)"
+	if [ "$(id -u)" -eq 0 ]; then
+		table="absent"
+		nft list table inet "$TP_TABLE" >/dev/null 2>&1 && table="present"
+		if [ "$engine" = running ] && [ "$table" = present ]; then
+			protection="Active"
+		elif [ "$engine" = running ]; then
+			protection="Degraded (interception table missing)"
+		else
+			protection="Starting"
+		fi
+	elif [ "$engine" = running ]; then
+		protection="Active"
+	else
+		protection="Starting"
+	fi
+	case "$protection" in
+	Active) echo "Protection: ${C_GREEN}$protection${C_RESET}" ;;
+	Starting) echo "Protection: ${C_YELLOW}$protection${C_RESET}" ;;
+	*) echo "Protection: ${C_RED}$protection${C_RESET}" ;;
+	esac
+
+	fails="$(status_field dns_failures)"
+	case "$(status_field dns_intercept)" in
+	doh)
+		if [ -z "$fails" ] || [ "$fails" = 0 ]; then dns_state="${C_GREEN}Healthy${C_RESET}"
+		else dns_state="${C_YELLOW}Degraded ($fails failure(s))${C_RESET}"; fi
+		;;
+	off) dns_state="${C_DIM}Not intercepted${C_RESET}" ;;
+	*) dns_state="${C_YELLOW}Unknown${C_RESET}" ;;
+	esac
+	echo "DNS: $dns_state"
+
+	echo "Mode: $(status_field mode | sed 's/^./\U&/')"
+	echo "Bypassed: $(status_field bypassed)"
+	echo "Failures: $(status_field failures)"
+}
+
+# Compact summary from the daemon's status file (rewritten every ~10s)
+# plus the live nft counter of intercepted connections. This is the
+# `--verbose` / `status --verbose` output.
+status_verbose() {
+	local state="inactive" counter
+	if have systemctl; then
+		state="$(systemctl is-active "$TP_SERVICE" 2>/dev/null || true)"
+	fi
+	echo "service:   $TP_SERVICE ($state)"
+	if [ "$state" != "active" ] || [ ! -r "$TP_STATUS_FILE" ]; then
+		echo "engine:    not running — HTTPS goes out directly, untouched"
+		return 0
+	fi
+	echo "engine:    $(status_field engine)"
+	echo "mode:      $(status_field mode)"
+	echo "dns:       $(status_field dns) resolvers; interception: $(status_field dns_intercept)" \
+		"($(status_field dns_queries) queries, $(status_field dns_failures) failed)"
+	echo "network:   $(status_field network)"
+	echo "flows:     $(status_field flows) total, $(status_field active) active"
+	echo "direct:    $(status_field direct)"
+	echo "bypassed:  $(status_field bypassed)"
+	echo "passthru:  $(status_field passthrough) (no hostname / manual pass / cooldown)"
+	echo "failures:  $(status_field failures)"
+	echo "verified:  $(status_field verified_ok) ok, $(status_field verified_bad) rejected"
+	echo "learned:   $(status_field decisions) decision(s); last: $(status_field last_learned)"
+	if [ "$(status_field conflict)" != "none" ] && [ -n "$(status_field conflict)" ]; then
+		echo "CONFLICT:  $(status_field conflict) — stop dpi-bypass: sudo systemctl stop dpi-bypass"
+	fi
+	other="$(nft list tables 2>/dev/null | awk '$3 != "'"$TP_TABLE"'" { print $2 " " $3 }' \
+		| while read -r fam tbl; do
+			nft list table "$fam" "$tbl" 2>/dev/null | grep -qE 'hook output.*nat|redirect to' \
+				&& nft list table "$fam" "$tbl" 2>/dev/null | grep -qE 'dport.*443.*redirect|redirect.*443' \
+				&& printf '%s %s; ' "$fam" "$tbl"
+		done || true)"
+	if [ -n "$other" ]; then
+		echo "WARNING:   another tool also redirects HTTPS (table $other) — two"
+		echo "           interceptors on one machine is not supported; results mix"
+	fi
+	counter="$(nft list chain inet "$TP_TABLE" output_nat 2>/dev/null \
+		| sed -n 's/.*counter packets \([0-9]*\).*redirect.*/\1/p' | head -n 1 || true)"
+	if [ -n "$counter" ]; then
+		echo "nftables:  table inet $TP_TABLE present, $counter connection(s) intercepted"
+	elif [ "$(id -u)" -ne 0 ]; then
+		echo "nftables:  (run with sudo to show interception counters)"
+	else
+		echo "nftables:  table inet $TP_TABLE MISSING — nothing is intercepted"
+	fi
+}
+
+# What applies to DOMAIN right now: manual rule, else a learned
+# decision for the current network, else the automatic ladder.
+tp_strategy() {
+	local domain="$1" fp rule learned
+	fp="$(status_field network)"
+	rule="$(awk -v d="$domain" '
+		/^\[domains\]/ { in_d = 1; next }
+		/^\[/ { in_d = 0 }
+		in_d && $1 == d && $2 == "=" { print $3 }' "$STRATEGY_CONF" 2>/dev/null | tail -n 1)"
+	if [ -n "$rule" ]; then
+		echo "$domain: $rule (manual, $STRATEGY_CONF)"
+		return 0
+	fi
+	if [ -n "$fp" ] && [ -r "$TP_DECISIONS" ]; then
+		learned="$(awk -v d="$domain" -v fp="$fp" 'tolower($1) == tolower(d) && $2 == fp {
+			print "IPv" $3 ": " $5 " address + " $4 " (learned " strftime("%F %T", $6) ")" }' \
+			"$TP_DECISIONS" 2>/dev/null || true)"
+	fi
+	if [ -n "${learned:-}" ]; then
+		printf '%s: %s\n' "$domain" "$learned"
+	else
+		echo "$domain: direct (automatic; nothing learned for it on this network)"
+	fi
+}
+
+# Seconds as "3d 4h" / "17h 5m" / "42s".
+fmt_duration() {
+	local t="${1:-0}" d h m
+	case "$t" in '' | *[!0-9]*) t=0 ;; esac
+	d=$((t / 86400)); h=$(((t % 86400) / 3600)); m=$(((t % 3600) / 60))
+	if [ "$d" -gt 0 ]; then printf '%dd %dh' "$d" "$h"
+	elif [ "$h" -gt 0 ]; then printf '%dh %dm' "$h" "$m"
+	elif [ "$m" -gt 0 ]; then printf '%dm' "$m"
+	else printf '%ds' "$t"; fi
+}
+
+# 0 if the address is a null/private/loopback answer: a resolver should
+# never hand those out for a public site, so seeing one is a strong
+# sign of DNS tampering.
+bogus_ip() {
+	case "$1" in
+	0.* | 127.* | 10.* | 192.168.* | 169.254.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].*) return 0 ;;
+	esac
+	return 1
+}
+
+# Read-only look at what the network does with DOMAIN, layered:
+# DNS, HTTPS, the decision Nivyx holds. --verbose adds the raw detail.
+tp_diagnose() {
+	local domain="$1" verbose="${2:-0}"
+	local sys trusted resolver="system resolver" poison="No" ip any_bogus=0 overlap=0 t
+	sys="$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"
+	if have dig; then
+		trusted="$(dig +short +time=2 +tries=1 A "$domain" @1.1.1.1 2>/dev/null | grep -E '^[0-9.]+$' | sort -u | tr '\n' ' ' || true)"
+	elif have curl; then
+		trusted="$(curl -sS --max-time 6 -H 'accept: application/dns-json' \
+			"https://cloudflare-dns.com/dns-query?name=$domain&type=A" 2>/dev/null \
+			| grep -oE '"data":"[0-9.]+"' | grep -oE '[0-9.]+' | sort -u | tr '\n' ' ' || true)"
+	else
+		trusted=""
+	fi
+	[ "$(status_field dns_intercept)" = doh ] && resolver="DoH (answered by Nivyx)"
+	for ip in $sys; do
+		bogus_ip "$ip" && any_bogus=1
+		for t in $trusted; do [ "$ip" = "$t" ] && overlap=1; done
+	done
+	if [ -z "$sys" ]; then poison="Unknown (no answer)"
+	elif [ "$any_bogus" = 1 ]; then poison="Yes (private/null address returned)"
+	elif [ -z "$trusted" ]; then poison="Not checked (no trusted answer)"
+	elif [ "$overlap" = 0 ]; then poison="Possible (answers differ; normal for CDNs)"
+	fi
+
+	echo "${C_CYAN}$domain${C_RESET}"
+	echo
+	echo "DNS"
+	echo "  Resolver: $resolver"
+	echo "  Address: $(printf '%s' "${sys:-none}" | sed 's/ *$//')"
+	echo "  Poisoning suspected: $poison"
+	echo
+	echo "HTTPS"
+	if have curl; then
+		local out code vfy rip
+		out="$(curl -sS -o /dev/null --max-time 15 \
+			-w '%{http_code} %{ssl_verify_result} %{remote_ip}' "https://$domain/" 2>&1 || true)"
+		code="${out%% *}"
+		if [[ "$code" =~ ^[0-9]{3}$ ]] && [ "$code" != 000 ]; then
+			vfy="$(printf '%s' "$out" | awk '{print $2}')"; rip="$(printf '%s' "$out" | awk '{print $3}')"
+			echo "  Result: ${C_GREEN}Success${C_RESET} (HTTP $code, certificate $([ "$vfy" = 0 ] && echo OK || echo "verify=$vfy"))"
+			[ "$verbose" = 1 ] && echo "  Remote address: $rip"
+		else
+			echo "  Result: ${C_RED}Failed${C_RESET} ($out)"
+		fi
+	else
+		echo "  Result: not checked (curl not found)"
+	fi
+	echo
+	echo "Decision"
+	tp_decision_block "$domain"
+	if [ "$verbose" = 1 ]; then
+		echo
+		echo "Detail"
+		echo "  Network fingerprint: $(status_field network)"
+		echo "  System DNS answers:  ${sys:-none}"
+		echo "  Trusted DNS answers: ${trusted:-none}"
+		if have journalctl; then
+			echo "  Recent log lines mentioning it:"
+			journalctl -u "$TP_SERVICE" --no-pager -n 500 2>/dev/null \
+				| grep -F " $domain" | tail -n 5 | sed 's/^/    /' || true
+		fi
+	fi
+}
+
+# Source / strategy / TTL of what applies to DOMAIN. Manual rules always
+# win; then a learned decision for this network; else automatic.
+tp_decision_block() {
+	local domain="$1" fp rule learned now
+	fp="$(status_field network)"
+	rule="$(awk -v d="$domain" '
+		/^\[domains\]/ { in_d = 1; next }
+		/^\[/ { in_d = 0 }
+		in_d && tolower($1) == tolower(d) && $2 == "=" { print $3 }' "$STRATEGY_CONF" 2>/dev/null | tail -n 1 || true)"
+	if [ -n "$rule" ]; then
+		echo "  Source: Manual rule ($STRATEGY_CONF)"
+		echo "  Strategy: $rule"
+		echo "  TTL: none (manual rules do not expire)"
+		return 0
+	fi
+	if [ -n "$fp" ] && [ -r "$TP_DECISIONS" ]; then
+		now="$(date +%s)"
+		learned="$(awk -v d="$domain" -v fp="$fp" -v now="$now" -v ttl=86400 \
+			'tolower($1) == tolower(d) && $2 == fp { print $3 " " $4 " " $6 }' "$TP_DECISIONS" 2>/dev/null | tail -n 1 || true)"
+		if [ -n "$learned" ]; then
+			set -- $learned
+			local left=$((86400 - (now - $3)))
+			[ "$left" -lt 0 ] && left=0
+			echo "  Source: Learned (this network)"
+			echo "  Strategy: $2 (IPv$1)"
+			echo "  TTL: $(fmt_duration "$left")"
+			echo "  Direct connection: failed earlier on this network, so the bypass is applied"
+			return 0
+		fi
+	fi
+	echo "  Source: Automatic"
+	echo "  Strategy: direct (nothing learned; connected without bypass so far)"
+}
+
+run_probe() {
+	local bin was_active=0 rc=0
+	bin="$(find_packet_binary)" || { err "dpi-proxy-packet not found (packet mode not installed)"; exit 1; }
+	# A probe starts its own scoped packet engine on the same table
+	# (inet dpi_proxy) and queue as the packet service: stop that
+	# service for the duration and start it again afterwards.
+	if have systemctl && systemctl is-active --quiet "$PACKET_SERVICE"; then
+		was_active=1
+		echo "Stopping $PACKET_SERVICE for the probe (restarted afterwards)..."
+		systemctl stop "$PACKET_SERVICE"
+	fi
+	DPI_PROXY_STRATEGY_CONF="${DPI_PROXY_STRATEGY_CONF:-$(service_env "$PACKET_SERVICE" DPI_PROXY_STRATEGY_CONF /etc/dpi-proxy/strategy.conf)}" \
+	DPI_PROXY_DISCOVERY_CACHE="${DPI_PROXY_DISCOVERY_CACHE:-$(service_env "$PACKET_SERVICE" DPI_PROXY_DISCOVERY_CACHE /etc/dpi-proxy/discovery-cache.conf)}" \
+		"$bin" "$@" || rc=$?
+	if [ "$was_active" = 1 ]; then
+		systemctl start "$PACKET_SERVICE" \
+			|| err "could not restart $PACKET_SERVICE — run: sudo $SELF packet start"
+	fi
+	return "$rc"
+}
+
+# ---- doctor ----------------------------------------------------------
+#
+# Read-only checks, each printed as [PASS|WARN|FAIL] plus a one-line
+# reason. Never modifies or disables anything (including other DPI
+# tools it detects). Exit status: 0 if nothing failed, 1 if any check
+# failed.
+
+DOCTOR_FAILED=0
+check() {
+	local level="$1" msg="$2" color="$C_RESET"
+	case "$level" in
+	FAIL) DOCTOR_FAILED=1; color="$C_RED" ;;
+	WARN) color="$C_YELLOW" ;;
+	PASS) color="$C_GREEN" ;;
+	esac
+	printf '%s[%-4s]%s %s\n' "$color" "$level" "$C_RESET" "$msg"
+}
+
+doctor_service() {
+	local state="inactive"
+	if ! have systemctl; then
+		check WARN "service: systemctl not found — cannot check"
+		return
+	fi
+	if ! systemctl cat "$TP_SERVICE" >/dev/null 2>&1; then
+		check WARN "service: $TP_SERVICE is not installed"
+		return
+	fi
+	state="$(systemctl is-active "$TP_SERVICE" 2>/dev/null || true)"
+	case "$state" in
+	active) check PASS "service: $TP_SERVICE is active" ;;
+	failed) check FAIL "service: $TP_SERVICE has failed — see: journalctl -u $TP_SERVICE -n 50" ;;
+	*) check WARN "service: $TP_SERVICE is $state" ;;
+	esac
+}
+
+doctor_interception() {
+	local svc="inactive" table=0
+	have systemctl && svc="$(systemctl is-active "$TP_SERVICE" 2>/dev/null || true)"
+	nft list table inet "$TP_TABLE" >/dev/null 2>&1 && table=1
+	if [ "$svc" = active ] && [ "$table" = 1 ]; then
+		check PASS "interception: nftables table inet $TP_TABLE present"
+	elif [ "$svc" = active ] && [ "$table" = 0 ]; then
+		if [ "$(id -u)" -ne 0 ]; then
+			check WARN "interception: cannot see nftables state without root (run: sudo $SELF doctor)"
+		else
+			check FAIL "interception: service active but table inet $TP_TABLE is missing"
+		fi
+	elif [ "$svc" != active ]; then
+		check WARN "interception: not running (service is $svc) — HTTPS is not intercepted"
+	fi
+}
+
+doctor_dns() {
+	local intercept fails queries
+	if [ ! -r "$TP_STATUS_FILE" ]; then
+		check WARN "dns: no status file yet ($TP_STATUS_FILE) — is the service running?"
+		return
+	fi
+	intercept="$(status_field dns_intercept)"
+	fails="$(status_field dns_failures)"
+	queries="$(status_field dns_queries)"
+	case "$intercept" in
+	doh)
+		if [ -z "$fails" ] || [ "$fails" = 0 ]; then
+			check PASS "dns: DNS-over-HTTPS active, 0 failures ($queries queries)"
+		else
+			check WARN "dns: DNS-over-HTTPS active but $fails failure(s) of $queries queries"
+		fi
+		;;
+	off) check WARN "dns: interception is off (DPI_PROXY_TP_DNS=off) — poisoned DNS is not protected against" ;;
+	*) check WARN "dns: unexpected state \"$intercept\"" ;;
+	esac
+}
+
+doctor_reachability() {
+	if ! have curl; then
+		check WARN "reachability: curl not found — cannot check"
+		return
+	fi
+	local code
+	code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://example.com/ 2>/dev/null || true)"
+	if [[ "$code" =~ ^[23][0-9][0-9]$ ]]; then
+		check PASS "reachability: https://example.com/ -> HTTP $code"
+	else
+		check FAIL "reachability: https://example.com/ failed (got \"$code\") — check your internet connection"
+	fi
+}
+
+doctor_bypass() {
+	local bin caps
+	bin="$(find_binary)" || { check WARN "bypass path: Nivyx engine not found"; return; }
+	caps="$("$bin" --capabilities 2>/dev/null || true)"
+	if echo "$caps" | grep -q '^transparent_mode: supported'; then
+		check PASS "bypass path: this binary supports transparent mode"
+	else
+		check FAIL "bypass path: this binary was built without transparent mode support"
+	fi
+}
+
+doctor_conflicts() {
+	local found=""
+	if systemctl is-active --quiet dpi-bypass 2>/dev/null || nft list table ip dpibypass >/dev/null 2>&1; then
+		found="$found dpi-bypass"
+	fi
+	if systemctl is-active --quiet zapret 2>/dev/null; then
+		found="$found zapret"
+	fi
+	if pgrep -x nfqws >/dev/null 2>&1; then
+		found="$found nfqws(zapret)"
+	fi
+	if pgrep -x goodbyedpi >/dev/null 2>&1; then
+		found="$found goodbyedpi"
+	fi
+	# Any other tool's table redirecting outbound 443 (same heuristic
+	# status --verbose uses).
+	local other
+	other="$(nft list tables 2>/dev/null | awk '$3 != "'"$TP_TABLE"'" && $3 != "'"$PACKET_TABLE"'" { print $2 "/" $3 }' \
+		| while read -r t; do
+			fam="${t%/*}"; tbl="${t#*/}"
+			nft list table "$fam" "$tbl" 2>/dev/null | grep -qE 'dport.*443.*redirect|redirect.*443' \
+				&& printf '%s ' "$t"
+		done || true)"
+	[ -n "$other" ] && found="$found nftables-table:($other)"
+	if [ -n "$found" ]; then
+		check WARN "conflicts: other DPI/interception tool(s) detected:$found — Nivyx does not disable them; stop one manually"
+	else
+		check PASS "conflicts: no other known DPI-bypass tool detected"
+	fi
+}
+
+doctor_vpn() {
+	local ifaces iflist
+	ifaces="$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^(tun|tap|wg)[0-9]*$' || true)"
+	if [ -n "$ifaces" ]; then
+		iflist="$(printf '%s' "$ifaces" | tr '\n' ' ' | sed 's/ *$//')"
+		check WARN "vpn: VPN/tunnel interface(s) present ($iflist) — if it also filters HTTPS, it may interact with Nivyx"
+	else
+		check PASS "vpn: no VPN/tunnel interface detected"
+	fi
+}
+
+doctor_stale() {
+	local svc="inactive"
+	have systemctl && svc="$(systemctl is-active "$TP_SERVICE" 2>/dev/null || true)"
+	if [ "$svc" != active ] && nft list table inet "$TP_TABLE" >/dev/null 2>&1; then
+		check FAIL "stale rules: table inet $TP_TABLE exists while the service is $svc — run: sudo nft delete table inet $TP_TABLE"
+	else
+		check PASS "stale rules: none found"
+	fi
+}
+
+doctor_permissions() {
+	if [ "$(id -u)" -eq 0 ]; then
+		check PASS "permissions: running as root — full diagnostics available"
+	else
+		check WARN "permissions: not root — some checks are limited; re-run with sudo for full detail"
+	fi
+	local bin
+	if bin="$(find_binary)" && [ -x "$bin" ]; then
+		check PASS "permissions: $bin is present and executable"
+	else
+		check FAIL "permissions: Nivyx engine not found in PATH or /usr/local/bin"
+	fi
+}
+
+doctor() {
+	echo "$SELF doctor — $(date -u +%FT%TZ)"
+	echo
+	doctor_permissions
+	doctor_service
+	doctor_interception
+	doctor_dns
+	doctor_reachability
+	doctor_bypass
+	doctor_conflicts
+	doctor_vpn
+	doctor_stale
+	echo
+	if [ "$DOCTOR_FAILED" = 1 ]; then
+		echo "Result: one or more checks FAILED — see above."
+		return 1
+	fi
+	echo "Result: no failures."
+	return 0
+}
+
+# ---- support-bundle ----------------------------------------------------
+#
+# A local diagnostics archive: version, OS, status, recent logs,
+# config, service state, conflict detection. No telemetry — this is
+# written to disk only; nothing is ever sent anywhere by this command.
+#
+# Redacted: obvious tokens/keys, host names in [learn]/[verify] log lines, this machine's public IP, the full
+# per-domain/per-IP DNS decision history (kept as counts only), and
+# $HOME/the invoking user's name in file paths.
+
+redact() {
+	local home user
+	home="${HOME:-}"
+	user="$(id -un 2>/dev/null || true)"
+	sed -E \
+		-e 's/([Tt]oken|[Kk]ey|[Ss]ecret|[Pp]assword)[=: ]+[A-Za-z0-9_.\-]{4,}/\1=[REDACTED]/g' \
+		-e 's/(\[(learn|verify)\] )[^ :]+:/\1<host>:/' \
+		${home:+-e "s#${home//\//\\/}#~#g"} \
+		${user:+-e "s/\\b${user}\\b/[user]/g"}
+}
+
+support_bundle() {
+	local outdir out ts bin
+	ts="$(date -u +%Y%m%dT%H%M%SZ)"
+	outdir="$(mktemp -d)"
+	out="${1:-./nivyx-support-$ts.tar.gz}"
+
+	{
+		echo "$SELF support-bundle"
+		echo "generated: $ts (UTC)"
+		echo "version:   $(version_string)"
+		bin="$(find_binary)" && echo "binary:    $bin"
+	} > "$outdir/version.txt"
+
+	uname -a > "$outdir/os.txt" 2>&1 || true
+	if have lsb_release; then lsb_release -a >> "$outdir/os.txt" 2>&1 || true; fi
+	[ -f /etc/os-release ] && cat /etc/os-release >> "$outdir/os.txt" 2>&1 || true
+
+	# the "last learned" line names a host: counts only in a bundle
+	{ status_short; status_verbose; } 2>&1 | sed 's/; last: .*$//' > "$outdir/status.txt" || true
+
+	doctor > "$outdir/doctor.txt" 2>&1 || true
+
+	if have systemctl; then
+		{
+			systemctl status --no-pager "$TP_SERVICE" 2>&1 || true
+			echo
+			systemctl status --no-pager "$PACKET_SERVICE" 2>&1 || true
+		} | redact > "$outdir/service-state.txt"
+	fi
+
+	if have journalctl; then
+		journalctl -u "$TP_SERVICE" --no-pager -n 500 2>/dev/null | redact > "$outdir/log-transparent.txt" || true
+		journalctl -u "$PACKET_SERVICE" --no-pager -n 200 2>/dev/null | redact > "$outdir/log-packet.txt" || true
+	fi
+
+	if [ -r "$STRATEGY_CONF" ]; then
+		redact < "$STRATEGY_CONF" > "$outdir/strategy.conf"
+	fi
+
+	# DNS/decision history: counts only, never the raw per-domain,
+	# per-IP records (that's the user's browsing history).
+	if [ -r "$TP_DECISIONS" ]; then
+		{
+			echo "learned decisions on record: $(wc -l < "$TP_DECISIONS" 2>/dev/null || echo 0)"
+			echo "(raw per-domain/per-IP records are not included in support bundles)"
+		} > "$outdir/dns-history-summary.txt"
+	fi
+
+	tar -C "$outdir" -czf "$out" .
+	rm -rf "$outdir"
+	echo "Wrote $out"
+	echo "Redacted: tokens/keys/passwords, \$HOME, username, host names in log lines, and per-domain DNS history (counts only)."
+	echo "Review it before sharing — it may still contain domain names you visited and log timestamps."
+}
+
+# ---- stats -------------------------------------------------------------
+#
+# Local-only counters from the daemon's status file plus aggregate counts
+# of the learned-decision file. Never prints host names; nothing is
+# collected or sent anywhere.
+
+stats() {
+	local started updated now up
+	if [ ! -r "$TP_STATUS_FILE" ]; then
+		echo "Nivyx is not running; no statistics."
+		return 0
+	fi
+	started="$(status_field started)"; updated="$(status_field updated)"
+	now="$(date +%s)"
+	up=0
+	case "$started" in '' | *[!0-9]*) ;; *) up=$((now - started)) ;; esac
+	echo "${C_CYAN}Nivyx $(version_string)${C_RESET} statistics (local only)"
+	echo "Uptime:        $(fmt_duration "$up")"
+	echo "Connections:   $(status_field flows) intercepted, $(status_field active) active now"
+	echo "  direct:      $(status_field direct)"
+	echo "  bypassed:    $(status_field bypassed)"
+	echo "  passthrough: $(status_field passthrough)"
+	echo "  failures:    $(status_field failures)"
+	echo "DNS:           $(status_field dns_queries) queries, $(status_field dns_failures) failed ($(status_field dns_intercept))"
+	echo "Verification:  $(status_field verified_ok) ok, $(status_field verified_bad) rejected"
+	echo "Strategy cache: $(status_field decisions) learned decision(s)"
+	if [ -r "$TP_DECISIONS" ]; then
+		awk '!/^#/ && NF >= 6 { s[$4]++; f[$3]++ }
+			END {
+				for (k in s) printf "  strategy %s: %d\n", k, s[k]
+				for (k in f) printf "  IPv%s: %d\n", k, f[k]
+			}' "$TP_DECISIONS" | sort
+	fi
+	echo "Network:       $(status_field network) (fingerprint)"
+}
+
+# ---- config ------------------------------------------------------------
+
+# Prints one "line N: reason" per problem; returns 1 if there were any.
+# Mirrors the engine's own parser: it never fails to start on a bad
+# line, it skips it and logs - this tells you which ones.
+config_check() {
+	local file="$STRATEGY_CONF" probs
+	if [ ! -e "$file" ]; then
+		echo "No config file at $file (defaults apply)."
+		return 0
+	fi
+	[ -r "$file" ] || { err "cannot read $file (try sudo)"; return 1; }
+	probs="$(awk '
+		function trim(x) { sub(/^[ \t\r]+/, "", x); sub(/[ \t\r]+$/, "", x); return x }
+		function valid_chain(v,   n, a, i) {
+			n = split(tolower(v), a, "+")
+			if (n < 1 || n > 2) return 0
+			for (i = 1; i <= n; i++)
+				if (a[i] !~ /^(pass|split|disorder|fake|fragment|tlsrec|tlsrec-split)$/) return 0
+			if (n == 2 && !((a[1] == "fake" && a[2] == "split") || (a[1] == "split" && a[2] == "fake"))) return 0
+			return 1
+		}
+		{
+			line = trim($0)
+			if (line == "" || line ~ /^[#;]/) next
+			if (line ~ /^\[/) {
+				in_d = (tolower(line) == "[domains]")
+				if (!in_d) printf "line %d: unknown section (only [domains] exists)\n", NR
+				next
+			}
+			i = index(line, "=")
+			if (i == 0) { printf "line %d: not a valid \"key = value\" line\n", NR; next }
+			k = trim(substr(line, 1, i - 1)); v = trim(substr(line, i + 1))
+			if (k == "") { printf "line %d: empty key\n", NR; next }
+			if (!in_d && tolower(k) == "fake_ttl") {
+				if (v !~ /^[0-9]+$/ || v + 0 < 1 || v + 0 > 255) printf "line %d: invalid fake_ttl (expected 1-255)\n", NR
+				next
+			}
+			if (!in_d && tolower(k) == "default") {
+				if (!valid_chain(v) || v ~ /\+/) printf "line %d: unknown strategy name \"%s\"\n", NR, v
+				next
+			}
+			if (in_d) {
+				if (!valid_chain(v)) printf "line %d: unknown strategy \"%s\" for %s\n", NR, v, k
+				next
+			}
+			printf "line %d: key outside [domains] other than default/fake_ttl: %s\n", NR, k
+		}' "$file")"
+	if [ -n "$probs" ]; then
+		echo "$file has problems (the engine skips these lines and keeps running):"
+		printf '%s\n' "$probs" | sed 's/^/  /'
+		return 1
+	fi
+	echo "$file: OK"
+	return 0
+}
+
+config_set() {
+	local domain="${1:-}" strat="${2:-}" tmp
+	[ -n "$domain" ] && [ -n "$strat" ] || { err "usage: $SELF config set DOMAIN pass|tlsrec|tlsrec-split"; exit 1; }
+	case "$domain" in *[!A-Za-z0-9.-]* | .* | "") err "not a valid domain: $domain"; exit 1 ;; esac
+	case "$strat" in pass | tlsrec | tlsrec-split) ;; *) err "strategy must be pass, tlsrec or tlsrec-split"; exit 1 ;; esac
+	[ -w "$(dirname "$STRATEGY_CONF")" ] || { err "needs root to change $STRATEGY_CONF: sudo $SELF config set $domain $strat"; exit 1; }
+	[ -e "$STRATEGY_CONF" ] || printf 'default = pass\n' > "$STRATEGY_CONF"
+	cp -p "$STRATEGY_CONF" "$STRATEGY_CONF.bak"
+	tmp="$(mktemp "$STRATEGY_CONF.XXXXXX")"
+	# pass 1: is there already a rule for the domain? pass 2: replace it in
+	# place, else insert right below [domains] (else append the section)
+	awk -v d="$domain" -v s="$strat" '
+		function is_hdr(x) { return tolower(x) ~ /^[ \t]*\[domains\][ \t]*$/ }
+		NR == FNR {
+			if ($0 ~ /^[ \t]*\[/) in1 = is_hdr($0)
+			if (in1 && tolower($1) == tolower(d) && $2 == "=") exists = 1
+			next
+		}
+		/^[ \t]*\[/ { in_d = is_hdr($0) }
+		exists && in_d && !done && tolower($1) == tolower(d) && $2 == "=" { print d " = " s; done = 1; next }
+		{ print }
+		!exists && !done && is_hdr($0) { print d " = " s; done = 1 }
+		END { if (!done) { print ""; print "[domains]"; print d " = " s } }' "$STRATEGY_CONF" "$STRATEGY_CONF" > "$tmp"
+	chmod --reference="$STRATEGY_CONF" "$tmp" 2>/dev/null || chmod 644 "$tmp"
+	mv -f "$tmp" "$STRATEGY_CONF"
+	echo "Set $domain = $strat in $STRATEGY_CONF (previous file kept as $STRATEGY_CONF.bak)."
+	config_check || echo "Warning: the file has other problems (see above); your change was still applied."
+	echo "Apply it with: sudo $SELF reload"
+}
+
+config_unset() {
+	local domain="${1:-}" tmp
+	[ -n "$domain" ] || { err "usage: $SELF config unset DOMAIN"; exit 1; }
+	[ -w "$STRATEGY_CONF" ] || { err "needs root: sudo $SELF config unset $domain"; exit 1; }
+	cp -p "$STRATEGY_CONF" "$STRATEGY_CONF.bak"
+	tmp="$(mktemp "$STRATEGY_CONF.XXXXXX")"
+	awk -v d="$domain" '
+		/^[ \t]*\[/ { in_d = (tolower($0) ~ /^[ \t]*\[domains\][ \t]*$/) }
+		in_d && tolower($1) == tolower(d) && $2 == "=" { next }
+		{ print }' "$STRATEGY_CONF" > "$tmp"
+	chmod --reference="$STRATEGY_CONF" "$tmp" 2>/dev/null || chmod 644 "$tmp"
+	mv -f "$tmp" "$STRATEGY_CONF"
+	echo "Removed the rule for $domain (previous file kept as $STRATEGY_CONF.bak). Apply it with: sudo $SELF reload"
+}
+
+config_cmd() {
+	local sub="${1:-show}"
+	[ $# -gt 0 ] && shift || true
+	case "$sub" in
+	show)
+		if [ -r "$STRATEGY_CONF" ]; then
+			echo "# $STRATEGY_CONF"
+			cat "$STRATEGY_CONF"
+		else
+			echo "No config file at $STRATEGY_CONF (defaults apply)."
+		fi
+		;;
+	path) echo "$STRATEGY_CONF" ;;
+	check) config_check ;;
+	set) config_set "$@" ;;
+	unset) config_unset "$@" ;;
+	*) err "unknown config command: $sub (show | path | check | set | unset)"; exit 1 ;;
+	esac
+}
+
+# ---- repair ------------------------------------------------------------
+#
+# Explicit and mutating, unlike doctor. Touches only Nivyx-owned state
+# (our unit, our nftables table, our files under /etc/dpi-proxy,
+# /var/lib/dpi-proxy, /run/dpi-proxy). Never edits your manual rules,
+# never touches other firewall tables, never disables other software.
+
+REPAIRED=0
+UNREPAIRABLE=0
+fixed() { REPAIRED=$((REPAIRED + 1)); printf '%s[fixed]%s %s\n' "$C_GREEN" "$C_RESET" "$1"; }
+okay() { printf '%s[ ok  ]%s %s\n' "$C_DIM" "$C_RESET" "$1"; }
+cannot() { UNREPAIRABLE=$((UNREPAIRABLE + 1)); printf '%s[ !!  ]%s %s\n' "$C_RED" "$C_RESET" "$1"; }
+
+repair() {
+	local svc unit_state bin dir f tmp bad
+	if [ "$(id -u)" -ne 0 ]; then
+		err "repair changes system state and needs root: sudo $SELF repair"
+		exit 1
+	fi
+	need_systemctl
+	echo "$SELF repair: checking Nivyx-owned state"
+	echo
+
+	if ! systemctl cat "$TP_SERVICE" >/dev/null 2>&1; then
+		cannot "service unit $TP_SERVICE is not installed; re-run scripts/install.sh from the Nivyx folder"
+		echo
+		echo "Nothing else can be repaired without the unit."
+		return 1
+	fi
+	okay "service unit $TP_SERVICE is installed"
+
+	if bin="$(find_binary)"; then
+		if [ ! -x "$bin" ]; then chmod 0755 "$bin" && fixed "made $bin executable"; else okay "engine binary $bin"; fi
+	else
+		cannot "engine binary /usr/local/bin/dpi-proxy is missing; re-run scripts/install.sh"
+	fi
+
+	for dir in "$(dirname "$STRATEGY_CONF")" "$(dirname "$TP_DECISIONS")"; do
+		if [ ! -d "$dir" ]; then mkdir -p "$dir" && chmod 0755 "$dir" && fixed "created missing directory $dir"; fi
+	done
+	if [ -e "$STRATEGY_CONF" ]; then
+		if [ ! -r "$STRATEGY_CONF" ] || [ "$(stat -c %a "$STRATEGY_CONF")" != 644 ]; then
+			chmod 0644 "$STRATEGY_CONF" && fixed "set $STRATEGY_CONF to 0644 (contents untouched)"
+		else
+			okay "config permissions"
+		fi
+		if config_check >/dev/null 2>&1; then
+			okay "config syntax"
+		else
+			cannot "config has syntax problems; your rules are not rewritten. See: $SELF config check"
+		fi
+	else
+		printf 'default = pass\n' > "$STRATEGY_CONF" && chmod 0644 "$STRATEGY_CONF" \
+			&& fixed "recreated missing $STRATEGY_CONF with defaults"
+	fi
+
+	# A damaged learned-decision file only costs re-learning; drop the
+	# unparseable lines (keeping a backup) rather than refuse to start.
+	if [ -s "$TP_DECISIONS" ]; then
+		bad="$(awk '!/^#/ && NF != 6' "$TP_DECISIONS" | wc -l)"
+		if [ "$bad" -gt 0 ]; then
+			systemctl stop "$TP_SERVICE" 2>/dev/null || true
+			cp -p "$TP_DECISIONS" "$TP_DECISIONS.bak"
+			awk '/^#/ || NF == 6' "$TP_DECISIONS.bak" > "$TP_DECISIONS"
+			fixed "removed $bad damaged line(s) from the learned-decision file (backup: $TP_DECISIONS.bak)"
+		else
+			okay "learned-decision file"
+		fi
+	fi
+
+	svc="$(systemctl is-active "$TP_SERVICE" 2>/dev/null || true)"
+	if [ "$svc" != active ]; then
+		# stale status file claiming a running engine
+		if [ -e "$TP_STATUS_FILE" ] && [ "$(status_field engine)" = running ]; then
+			rm -f "$TP_STATUS_FILE" && fixed "removed stale status file ($TP_STATUS_FILE)"
+		fi
+		# stale interception table left by a crashed/killed engine
+		if nft list table inet "$TP_TABLE" >/dev/null 2>&1; then
+			nft delete table inet "$TP_TABLE" && fixed "removed stale nftables table inet $TP_TABLE (our own; no other table touched)"
+		else
+			okay "no stale nftables table"
+		fi
+	fi
+
+	unit_state="$(systemctl is-enabled "$TP_SERVICE" 2>/dev/null || true)"
+	if [ "$unit_state" != enabled ]; then
+		systemctl enable "$TP_SERVICE" >/dev/null 2>&1 && fixed "enabled $TP_SERVICE so it starts at boot"
+	else
+		okay "service is enabled at boot"
+	fi
+
+	svc="$(systemctl is-active "$TP_SERVICE" 2>/dev/null || true)"
+	if [ "$svc" != active ]; then
+		systemctl reset-failed "$TP_SERVICE" 2>/dev/null || true
+		if systemctl start "$TP_SERVICE"; then fixed "started $TP_SERVICE (was $svc)"; else cannot "could not start $TP_SERVICE: journalctl -u $TP_SERVICE -n 30"; fi
+	else
+		okay "service is running"
+		if ! nft list table inet "$TP_TABLE" >/dev/null 2>&1; then
+			systemctl restart "$TP_SERVICE" && fixed "restarted $TP_SERVICE: its interception table was missing (removed externally)"
+		else
+			okay "interception table present"
+		fi
+	fi
+
+	local i=0
+	while [ $i -lt 20 ]; do
+		[ "$(status_field engine)" = running ] && break
+		sleep 0.5; i=$((i + 1))
+	done
+	if [ "$(status_field engine)" = running ]; then
+		okay "engine reports running"
+	else
+		cannot "engine did not report running within 10s"
+	fi
+	echo
+	if [ "$UNREPAIRABLE" -gt 0 ]; then
+		echo "Repair finished with $UNREPAIRABLE problem(s) it cannot fix alone ($REPAIRED fixed)."
+		return 1
+	fi
+	echo "Repair finished: $REPAIRED fixed, nothing else wrong."
+	return 0
+}
+
+# ---- update ------------------------------------------------------------
+#
+# Only on explicit request, never in the background. Official GitHub
+# releases only; the download is verified against the release's
+# SHA256SUMS before anything is installed; configuration and learned
+# state are never touched; a failed health check restores the previous
+# version.
+#
+# NIVYX_RELEASE_API overrides the release endpoint (used by the test
+# suite); a notice is printed whenever it is set.
+
+RELEASE_API="${NIVYX_RELEASE_API:-https://api.github.com/repos/kadireren7/nivyx/releases/latest}"
+OFFICIAL_PREFIX="https://github.com/kadireren7/nivyx/releases/download/"
+
+# True if $1 is strictly newer than $2 (plain x.y.z comparison).
+ver_gt() {
+	[ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
+}
+
+release_json=""
+work=""
+fetch_release() {
+	have curl || { err "curl is required for update"; exit 1; }
+	[ -n "${NIVYX_RELEASE_API:-}" ] && echo "note: using update source $RELEASE_API" >&2
+	release_json="$(curl -fsSL --max-time 20 -H 'Accept: application/vnd.github+json' "$RELEASE_API")" \
+		|| { err "could not reach the release server ($RELEASE_API); check your connection"; exit 1; }
+	latest="$(printf '%s' "$release_json" | sed -n 's/.*"tag_name"[ ]*:[ ]*"v\{0,1\}\([0-9][0-9.]*\)".*/\1/p' | head -n 1)"
+	[ -n "$latest" ] || { err "no stable release found"; exit 1; }
+}
+
+update_cmd() {
+	local check=0 current latest asset url sums_url arch want got bak rc=0
+	for a in "$@"; do
+		case "$a" in
+		--check) check=1 ;;
+		*) err "unknown update option: $a"; exit 1 ;;
+		esac
+	done
+	current="$(version_string)"
+	fetch_release
+	echo "Current: ${current:-unknown}"
+	echo "Latest:  $latest"
+	if ! ver_gt "$latest" "${current:-0}"; then
+		echo "Nivyx is up to date."
+		return 0
+	fi
+	echo "Update available."
+	[ "$check" = 1 ] && { echo "Run: sudo $SELF update"; return 0; }
+
+	[ "$(id -u)" -eq 0 ] || { err "updating needs root: sudo $SELF update"; exit 1; }
+	case "$(uname -m)" in
+	x86_64 | amd64) arch=x86_64 ;;
+	*) err "no release asset for this architecture ($(uname -m)); build from source"; exit 1 ;;
+	esac
+	asset="nivyx-linux-$arch.tar.gz"
+	url="$(printf '%s' "$release_json" | grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*/'"$asset"'"' | sed 's/.*"\(http[^"]*\)"$/\1/' | head -n 1)"
+	sums_url="$(printf '%s' "$release_json" | grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*/SHA256SUMS"' | sed 's/.*"\(http[^"]*\)"$/\1/' | head -n 1)"
+	[ -n "$url" ] && [ -n "$sums_url" ] || { err "release $latest has no $asset and/or SHA256SUMS"; exit 1; }
+	if [ -z "${NIVYX_RELEASE_API:-}" ]; then
+		case "$url$sums_url" in
+		"$OFFICIAL_PREFIX"*"$OFFICIAL_PREFIX"*) ;;
+		*) err "refusing a download URL outside the official repository"; exit 1 ;;
+		esac
+	fi
+
+	work="$(mktemp -d /var/tmp/nivyx-update.XXXXXX)"
+	trap 'rm -rf "${work:-}"' EXIT
+	echo "Downloading $asset ..."
+	curl -fsSL --max-time 300 -o "$work/$asset" "$url" || { err "download failed"; exit 1; }
+	curl -fsSL --max-time 60 -o "$work/SHA256SUMS" "$sums_url" || { err "could not download SHA256SUMS"; exit 1; }
+
+	want="$(awk -v a="$asset" '$2 == a || $2 == "*" a { print $1 }' "$work/SHA256SUMS" | head -n 1)"
+	got="$(sha256sum "$work/$asset" | awk '{print $1}')"
+	if [ -z "$want" ] || [ "$want" != "$got" ]; then
+		err "SHA-256 mismatch for $asset (expected ${want:-<none listed>}, got $got); nothing was installed"
+		exit 1
+	fi
+	echo "SHA-256 verified."
+
+	tar -xzf "$work/$asset" -C "$work" || { err "could not unpack the download"; exit 1; }
+	local pkg="$work/nivyx-linux-$arch"
+	[ -x "$pkg/dpi-proxy" ] && [ -f "$pkg/nivyx" ] || { err "unexpected package layout; nothing was installed"; exit 1; }
+	"$pkg/dpi-proxy" --capabilities 2>/dev/null | grep -q '^transparent_mode: supported' \
+		|| { err "the downloaded engine does not run here; nothing was installed"; exit 1; }
+	[ "$("$pkg/dpi-proxy" --version 2>/dev/null | sed -n 's/^dpi-proxy //p')" = "$latest" ] \
+		|| { err "the downloaded engine is not version $latest; nothing was installed"; exit 1; }
+
+	# stage next to the targets (same filesystem) so the swap is a rename
+	bak="/var/lib/dpi-proxy/rollback"
+	mkdir -p "$bak"
+	cp -p /usr/local/bin/dpi-proxy "$bak/dpi-proxy"
+	cp -p /usr/local/bin/nivyx "$bak/nivyx"
+	install -m 0755 "$pkg/dpi-proxy" /usr/local/bin/.dpi-proxy.new
+	install -m 0755 "$pkg/nivyx" /usr/local/bin/.nivyx.new
+	command -v strip >/dev/null 2>&1 && strip /usr/local/bin/.dpi-proxy.new 2>/dev/null || true
+	mv -f /usr/local/bin/.dpi-proxy.new /usr/local/bin/dpi-proxy
+	mv -f /usr/local/bin/.nivyx.new /usr/local/bin/nivyx
+	# man page and completions (best effort; same places the installer uses)
+	if [ -f "$pkg/nivyx.1" ]; then
+		install -d /usr/local/share/man/man1 && install -m 0644 "$pkg/nivyx.1" /usr/local/share/man/man1/nivyx.1 || true
+	fi
+	if [ -d "$pkg/completions" ]; then
+		install -D -m 0644 "$pkg/completions/nivyx.bash" /usr/share/bash-completion/completions/nivyx 2>/dev/null || true
+		install -D -m 0644 "$pkg/completions/_nivyx" /usr/local/share/zsh/site-functions/_nivyx 2>/dev/null || true
+		install -D -m 0644 "$pkg/completions/nivyx.fish" /usr/share/fish/vendor_completions.d/nivyx.fish 2>/dev/null || true
+	fi
+	echo "Installed $latest; restarting the service ..."
+	systemctl restart "$TP_SERVICE" || rc=1
+
+	if [ "$rc" = 0 ] && update_healthy; then
+		echo "Health check passed."
+		echo "Nivyx updated to $latest. Configuration and learned state were kept."
+		rm -rf "$bak"
+		return 0
+	fi
+	err "the new version failed its health check; restoring ${current:-the previous version}"
+	mv -f "$bak/dpi-proxy" /usr/local/bin/dpi-proxy
+	mv -f "$bak/nivyx" /usr/local/bin/nivyx
+	systemctl reset-failed "$TP_SERVICE" 2>/dev/null || true
+	systemctl restart "$TP_SERVICE" || true
+	if update_healthy; then
+		err "rolled back; Nivyx ${current:-previous} is running again"
+	else
+		err "rollback finished but the service is still unhealthy: sudo $SELF repair"
+	fi
+	rm -rf "$bak"
+	exit 1
+}
+
+# Engine reports running within 30s and HTTPS works through it.
+update_healthy() {
+	local i=0 code pid
+	# the status file must come from the CURRENT service process: a stale
+	# "engine: running" left by the old one proves nothing
+	while [ $i -lt 60 ]; do
+		pid="$(systemctl show -p MainPID --value "$TP_SERVICE" 2>/dev/null || true)"
+		[ -n "$pid" ] && [ "$pid" != 0 ] && [ "$(status_field pid)" = "$pid" ] \
+			&& [ "$(status_field engine)" = running ] && break
+		sleep 0.5; i=$((i + 1))
+	done
+	[ "$i" -lt 60 ] || return 1
+	code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 https://example.com/ 2>/dev/null || true)"
+	[[ "$code" =~ ^[23][0-9][0-9]$ ]]
+}
+
+usage() {
+	cat <<EOF
+Nivyx — system-wide DPI bypass
+
+Usage: $SELF <command> [options]
+
+Everyday
+  status [--verbose]       is it working? (--verbose: full detail)
+  doctor                   health checks (read-only)
+  diagnose DOMAIN          explain what happens for one site (--verbose: detail)
+  stats                    local counters (no browsing history)
+  logs [N]                 recent log lines
+
+Control (need root)
+  start | stop | restart | reload
+  repair                   fix Nivyx-owned state (service, stale rules, files)
+  update [--check]         update to the latest official release
+
+Configuration
+  config show|path|check|set DOMAIN STRATEGY|unset DOMAIN
+  strategy DOMAIN          which rule applies to DOMAIN right now
+
+Other
+  support-bundle [FILE]    redacted local diagnostics archive (no telemetry)
+  version                  print the version
+  help [COMMAND]           this text, or help for one command
+
+Optional packet mode: packet, probe, reprobe, networks (see: $SELF help packet)
+Documentation: docs/cli.md, man nivyx
+EOF
+}
+
+help_cmd() {
+	case "${1:-}" in
+	"") usage ;;
+	status) echo "$SELF status [--verbose]
+Shows version, service state, protection, DNS health and mode. --verbose adds
+flows, counters, the network fingerprint and the interception table state." ;;
+	doctor) echo "$SELF doctor
+Read-only health checks: service, interception, DNS, reachability, conflicts,
+VPN, stale rules. Changes nothing; exits 1 if a check failed. Use 'repair' to fix." ;;
+	diagnose) echo "$SELF diagnose DOMAIN [--verbose]
+Explains DNS (resolver, address, poisoning suspected), HTTPS (result through
+Nivyx) and the decision Nivyx holds (source, strategy, TTL). Read-only." ;;
+	stats) echo "$SELF stats
+Uptime, connection counters, DNS counters and strategy-cache sizes from the
+local status file. No hostnames; nothing leaves this machine." ;;
+	logs) echo "$SELF logs [N]   last N log lines (default 100)" ;;
+	start | stop | restart | reload) echo "$SELF $1   (root) control the service; stop leaves networking untouched" ;;
+	repair) echo "$SELF repair   (root)
+Fixes Nivyx-owned state only: stopped/disabled service, stale status file,
+stale nftables table, missing interception table, file permissions, damaged
+learned-decision file. Never edits your rules or other firewall tables.
+Every repair is printed." ;;
+	update) echo "$SELF update [--check]   (root to apply)
+--check only compares versions. Otherwise downloads the official release,
+verifies its SHA-256 against SHA256SUMS, installs, restarts, health-checks,
+and restores the previous version if the check fails. Config and learned state
+are kept. Never runs on its own." ;;
+	config) echo "$SELF config show | path | check | set DOMAIN STRATEGY | unset DOMAIN
+STRATEGY is pass, tlsrec or tlsrec-split. Manual rules always override automatic
+learning. 'set' and 'unset' change one line, keep a .bak copy, and never run
+unless you ask. Apply with: sudo $SELF reload" ;;
+	strategy) echo "$SELF strategy DOMAIN   which rule applies right now (manual / learned / automatic)" ;;
+	support-bundle) echo "$SELF support-bundle [FILE]   tar.gz of version, status, logs and config; tokens, \$HOME and
+username redacted, host history reduced to counts. Written locally only." ;;
+	version) echo "$SELF version" ;;
+	help) echo "$SELF help [COMMAND]   this overview, or details for one command" ;;
+	packet) echo "$SELF packet start|stop|restart|reload|status|logs [N]   (optional packet mode)
+$SELF probe DOMAIN | reprobe DOMAIN | networks" ;;
+	*) err "no help for: $1"; return 1 ;;
+	esac
+}
+
+JSON_FLAG=()
+if [ "${1:-}" = "--json" ]; then
+	JSON_FLAG=(--json)
+	shift
+fi
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift || true
+
+packet_cmd() {
+	local sub="${1:-status}"
+	[ $# -gt 0 ] && shift || true
+	case "$sub" in
+	start | stop | restart | reload)
+		need_systemctl
+		systemctl "$sub" "$PACKET_SERVICE"
+		;;
+	status)
+		if have systemctl; then
+			systemctl status --no-pager "$PACKET_SERVICE" || true
+			echo
+		fi
+		bin="$(find_packet_binary)" || { err "dpi-proxy-packet not found"; exit 1; }
+		"$bin" "${JSON_FLAG[@]}" --status
+		;;
+	strategy)
+		[ $# -ge 1 ] || { err "packet strategy needs a domain"; exit 1; }
+		bin="$(find_packet_binary)" || { err "dpi-proxy-packet not found"; exit 1; }
+		exec "$bin" "${JSON_FLAG[@]}" --show-strategy "$1"
+		;;
+	logs)
+		exec journalctl -u "$PACKET_SERVICE" -n "${1:-100}" --no-pager
+		;;
+	*)
+		err "unknown packet command: $sub"
+		exit 1
+		;;
+	esac
+}
+
+case "$cmd" in
+status)
+	if [ "${1:-}" = "--verbose" ] || [ "${1:-}" = "-v" ]; then
+		status_verbose
+	else
+		status_short
+	fi
+	;;
+start | stop | restart | reload)
+	need_systemctl
+	systemctl "$cmd" "$TP_SERVICE"
+	;;
+logs)
+	have journalctl || { err "journalctl not found"; exit 1; }
+	exec journalctl -u "$TP_SERVICE" -n "${1:-100}" --no-pager
+	;;
+strategy)
+	[ $# -ge 1 ] || { err "strategy needs a domain, e.g. $SELF strategy discord.com"; exit 1; }
+	tp_strategy "$1"
+	;;
+diagnose)
+	dverbose=0; ddomain=""
+	for a in "$@"; do
+		case "$a" in
+		--verbose | -v) dverbose=1 ;;
+		*) ddomain="$a" ;;
+		esac
+	done
+	[ -n "$ddomain" ] || { err "diagnose needs a domain, e.g. $SELF diagnose discord.com"; exit 1; }
+	tp_diagnose "$ddomain" "$dverbose"
+	;;
+stats)
+	stats
+	;;
+config)
+	config_cmd "$@"
+	;;
+repair)
+	repair
+	;;
+update)
+	update_cmd "$@"
+	;;
+doctor)
+	doctor
+	;;
+support-bundle)
+	support_bundle "${1:-}"
+	;;
+version)
+	ver="$(version_string)"
+	echo "Nivyx ${ver:-(version unknown — engine not found)}"
+	;;
+packet)
+	packet_cmd "$@"
+	;;
+probe)
+	[ $# -ge 1 ] || { err "probe needs a domain, e.g. $SELF probe example.com"; exit 1; }
+	run_probe --probe "$1"
+	;;
+reprobe)
+	[ $# -ge 1 ] || { err "reprobe needs a domain"; exit 1; }
+	run_probe --reprobe "$1"
+	;;
+networks)
+	bin="$(find_packet_binary)" || { err "dpi-proxy-packet not found"; exit 1; }
+	exec "$bin" "${JSON_FLAG[@]}" --status
+	;;
+-h | --help | "")
+	usage
+	;;
+help)
+	help_cmd "${1:-}"
+	;;
+*)
+	err "unknown command: $cmd (see --help)"
+	usage >&2
+	exit 1
+	;;
+esac

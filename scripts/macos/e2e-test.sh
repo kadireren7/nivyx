@@ -97,11 +97,9 @@ stepn "install (sudo ./install.sh from the package, as a user would)"
 ( cd "$PKG" && sudo ./install.sh ) || die "install.sh failed"
 wait_running || die "service not running after install"
 [ -f "/Library/LaunchDaemons/$LABEL.plist" ] || die "plist missing"
-[ -x /usr/local/bin/dpi-proxy ] && [ -x /usr/local/bin/nivyx ] && [ -x /usr/local/bin/dpictl ] && [ -x /usr/local/bin/dpi-proxy-ctl ] \
+[ -x /usr/local/bin/dpi-proxy ] && [ -x /usr/local/bin/nivyx ] \
 	|| die "binaries missing"
 command -v nivyx >/dev/null || die "nivyx is not on the PATH"
-command -v dpictl >/dev/null || die "dpictl is not on the PATH"
-command -v dpi-proxy-ctl >/dev/null || die "dpi-proxy-ctl is not on the PATH"
 pass "installed; launchd job running (pid $(daemon_pid)); installer health check passed"
 
 stepn "PF: enabled, our anchor loaded, main ruleset untouched, watchdog up"
@@ -215,7 +213,7 @@ pass "5 requests -> $delta flows"
 
 stepn "bypass path: forced tlsrec rule for example.com"
 printf '\n[domains]\nexample.com = tlsrec\n' | sudo tee -a "$CONF" >/dev/null
-sudo dpictl restart >/dev/null || die "restart failed"
+sudo nivyx restart >/dev/null || die "restart failed"
 wait_running || die "not running after restart"
 c="$(fetch https://example.com/)"; ok "$c" || die "example.com with tlsrec -> '$c'"
 wait_status
@@ -234,33 +232,37 @@ ps -o pid=,rss=,vsz=,%cpu=,time= -p "$pid" | awk '{ printf "daemon pid %s: RSS %
 ps -o pid=,rss= -p "$(pgrep -f -- '--pf-watchdog' | head -n 1)" | awk '{ printf "watchdog pid %s: RSS %.1f MB\n", $1, $2/1024 }'
 pass "measured"
 
-stepn "dpictl (as a normal user, by name)"
-out="$(dpictl status --verbose 2>&1)"; echo "$out"
+stepn "nivyx (as a normal user, by name)"
+out="$(nivyx status --verbose 2>&1)"; echo "$out"
 echo "$out" | grep -q '^engine:    running' || die "status --verbose: engine not running"
 for k in mode dns network flows direct bypassed failures pf watchdog; do
 	echo "$out" | grep -q "^$k:" || die "status --verbose lacks '$k'"
 done
-short="$(dpictl status 2>&1)"; echo "$short"
+short="$(nivyx status 2>&1)"; echo "$short"
 echo "$short" | grep -q '^Service: Running' || die "short status: service not Running"
 echo "$short" | grep -q '^Protection: Active' || die "short status: protection not Active"
-out="$(dpictl diagnose example.com 2>&1)"; echo "$out"
-echo "$out" | grep -q '^https:        HTTP [23]' || die "diagnose failed"
-out="$(dpictl logs 5 2>&1)"; echo "$out"
-dpictl logs 200 | grep -q 'transparent mode: TCP/443' || die "logs lack the startup line"
-dpictl strategy example.com | grep -q 'tlsrec (manual' || die "strategy"
-out="$(sudo dpictl status --verbose 2>&1)"
+out="$(nivyx diagnose example.com 2>&1)"; echo "$out"
+echo "$out" | grep -q 'Result: Success (HTTP [23]' || die "diagnose failed"
+for h in '^DNS' '^HTTPS' '^Decision' 'Poisoning suspected' 'Source:'; do
+	echo "$out" | grep -q "$h" || die "diagnose output lacks '$h'"
+done
+nivyx diagnose example.com --verbose | grep -q '^Detail' || die "diagnose --verbose has no detail"
+out="$(nivyx logs 5 2>&1)"; echo "$out"
+nivyx logs 200 | grep -q 'transparent mode: TCP/443' || die "logs lack the startup line"
+nivyx strategy example.com | grep -q 'tlsrec (manual' || die "strategy"
+out="$(sudo nivyx status --verbose 2>&1)"
 echo "$out" | grep -q '^pf rules:' || die "status as root lacks the live PF rule count"
-dpictl stop >/dev/null 2>&1 && die "stop without sudo should refuse"
-dpictl version | grep -q . || die "version printed nothing"
-pass "dpictl status/diagnose/logs/strategy/version report correctly"
+nivyx stop >/dev/null 2>&1 && die "stop without sudo should refuse"
+nivyx version | grep -q . || die "version printed nothing"
+pass "nivyx status/diagnose/logs/strategy/version report correctly"
 
-stepn "dpictl doctor"
-dpictl doctor || die "doctor reported a failure while the service is healthy"
+stepn "nivyx doctor"
+nivyx doctor || die "doctor reported a failure while the service is healthy"
 pass "doctor: no failures"
 
-stepn "dpictl support-bundle (redaction)"
+stepn "nivyx support-bundle (redaction)"
 bundle="/tmp/dpi-e2e-support-$$.tar.gz"
-dpictl support-bundle "$bundle" || die "support-bundle failed"
+nivyx support-bundle "$bundle" || die "support-bundle failed"
 [ -s "$bundle" ] || die "support-bundle produced an empty/missing archive"
 bdir="/tmp/dpi-e2e-support-$$"
 mkdir -p "$bdir"
@@ -280,21 +282,21 @@ no_color_out="$(NO_COLOR=1 nivyx status 2>&1)"
 printf '%s' "$no_color_out" | grep -q "$(printf '\033')" && die "NO_COLOR=1 but nivyx emitted a color escape code"
 pass "nivyx status/--help ran; NO_COLOR honored"
 
-stepn "dpictl / dpi-proxy-ctl (compatibility aliases)"
-out="$(dpi-proxy-ctl status 2>&1)"; echo "$out"
-echo "$out" | grep -q '^Service: Running' || die "alias status: service not Running"
-out="$(dpi-proxy-ctl diagnose example.com 2>&1)"; echo "$out"
-echo "$out" | grep -q '^https:        HTTP [23]' || die "alias diagnose failed"
-pass "dpictl/dpi-proxy-ctl still work as aliases"
+stepn "one public command: no legacy aliases installed"
+for old in dpictl dpi-proxy-ctl; do
+	[ -e "/usr/local/bin/$old" ] && die "/usr/local/bin/$old is still installed"
+	command -v "$old" >/dev/null 2>&1 && die "$old is on the PATH"
+done
+pass "only nivyx is installed"
 
 stepn "restart keeps working"
-sudo dpictl restart >/dev/null || die "restart failed"
+sudo nivyx restart >/dev/null || die "restart failed"
 wait_running || die "not running after restart"
 c="$(fetch https://www.wikipedia.org/)"; ok "$c" || die "after restart -> '$c'"
 pass "after restart: HTTP $c (pid $(daemon_pid))"
 
 stepn "stop = ordinary networking, PF as before"
-sudo dpictl stop || die "stop failed"
+sudo nivyx stop || die "stop failed"
 [ -z "$(daemon_pid)" ] || die "still running"
 anchor_empty || die "rules or tables left in $ANCHOR after stop"
 sleep 1
@@ -307,7 +309,7 @@ dscacheutil -q host -a name example.com | grep -q '^ip_address:' || die "DNS bro
 pass "stopped: anchor empty, PF exactly as before, HTTPS $c, DNS OK"
 
 stepn "crash (SIGKILL of the daemon) = fail-open at once, then launchd restarts it"
-sudo dpictl start >/dev/null || die "start failed"
+sudo nivyx start >/dev/null || die "start failed"
 wait_running || die "not running after start"
 old="$(daemon_pid)"
 sudo kill -9 "$old"
@@ -353,18 +355,128 @@ c="$(fetch https://example.com/)"; ok "$c" || die "after restart -> '$c'"
 [ "$(pgrep -f -- '--pf-watchdog' | wc -l | tr -d ' ')" -eq 1 ] || die "not exactly one watchdog"
 pass "restarted as pid $(daemon_pid) with one watchdog; HTTPS $c"
 
+stepn "stats, config, help (v2.2 commands)"
+nivyx help | grep -q 'update \[--check\]' || die "help does not list update"
+while read -r c; do [ -n "$c" ] || continue; out="$(nivyx help "$c" 2>&1)" && [ -n "$out" ] || die "nivyx help $c failed"; done < "$(dirname "$0")/../commands.txt"
+nivyx help config | grep -q 'config show' || die "help config failed"
+out="$(nivyx stats)"; echo "$out"
+echo "$out" | grep -q '^Connections:' || die "stats printed no connection counters"
+echo "$out" | grep -q 'example\.com' && die "stats leaked a host name"
+nivyx config path | grep -q strategy.conf || die "config path"
+nivyx config check || die "config check failed on the installed config"
+sudo cp -p "$CONF" /tmp/nivyx-conf.orig
+sudo nivyx config set e2e-config-test.example tlsrec | grep -q 'Set e2e-config-test.example' || die "config set"
+grep -q '^e2e-config-test.example = tlsrec' "$CONF" || die "config set did not write the rule"
+[ -f "$CONF.bak" ] || die "config set kept no backup"
+nivyx strategy e2e-config-test.example | grep -q 'tlsrec (manual' || die "strategy does not show the manual rule"
+sudo nivyx config unset e2e-config-test.example >/dev/null
+grep -q e2e-config-test "$CONF" && die "config unset left the rule"
+printf 'this is not valid\n' | sudo tee -a "$CONF" >/dev/null
+nivyx config check && die "config check missed a broken line"
+sudo cp -p /tmp/nivyx-conf.orig "$CONF"
+pass "stats/config/help behave; manual config preserved"
+
+stepn "repair: nothing wrong, then PF anchor emptied externally, then unloaded job"
+out="$(sudo nivyx repair)"; echo "$out"
+echo "$out" | grep -q 'nothing else wrong' || die "repair on a healthy install reported something"
+sudo pfctl -a "$ANCHOR" -F nat >/dev/null 2>&1; sudo pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
+[ "$(anchor_rules)" -eq 0 ] || die "could not empty the anchor for the test"
+out="$(sudo nivyx repair)"; echo "$out"
+echo "$out" | grep -q 'fixed' || die "repair did not notice the emptied anchor"
+wait_running || die "not running after repair"
+t=0; while [ $t -lt 20 ] && [ "$(anchor_rules)" -lt 4 ]; do sleep 1; t=$((t + 1)); done
+[ "$(anchor_rules)" -ge 4 ] || die "anchor rules missing after repair"
+sudo launchctl bootout "system/$LABEL" 2>/dev/null; sleep 2
+sudo pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
+out="$(sudo nivyx repair)"; echo "$out"
+wait_running || die "repair did not bring the job back"
+c="$(fetch https://example.com/)"; ok "$c" || die "after repair -> '$c'"
+pass "repair restored interception; HTTPS $c"
+
+stepn "update: check, bad checksum, broken release (rollback), good release"
+mock="$(mktemp -d /tmp/nivyx-mock.XXXXXX)"; port=18765
+arch="$(uname -m)"
+current="$(nivyx version | awk '{print $2}')"
+# an engine that claims to be 9.9.9: the real one with the version string patched
+LC_ALL=C sed 's/2\.2\.0/9.9.9/g' /usr/local/bin/dpi-proxy > "$mock/engine-good"
+chmod +x "$mock/engine-good"; codesign --force -s - "$mock/engine-good" >/dev/null 2>&1
+"$mock/engine-good" --version | grep -q '9\.9\.9' || die "could not build the 9.9.9 test engine ($("$mock/engine-good" --version))"
+cat > "$mock/engine-broken" <<'BROKEN'
+#!/bin/sh
+case "$1" in
+--version) echo "dpi-proxy 9.9.9" ;;
+--capabilities) echo "transparent_mode: supported" ;;
+*) exit 1 ;;
+esac
+BROKEN
+chmod +x "$mock/engine-broken"
+mk_release() {	# $1 engine, $2 good|bad checksum
+	rm -rf "$mock/pkg" "$mock/nivyx-macos-$arch.zip" "$mock/SHA256SUMS" "$mock/latest.json"
+	mkdir -p "$mock/pkg/nivyx-macos-$arch"
+	cp "$1" "$mock/pkg/nivyx-macos-$arch/dpi-proxy"
+	cp "$PKG/nivyx" "$mock/pkg/nivyx-macos-$arch/nivyx"
+	ditto -c -k --keepParent "$mock/pkg/nivyx-macos-$arch" "$mock/nivyx-macos-$arch.zip"
+	if [ "$2" = good ]; then
+		(cd "$mock" && shasum -a 256 "nivyx-macos-$arch.zip" > SHA256SUMS)
+	else
+		echo "0000000000000000000000000000000000000000000000000000000000000000  nivyx-macos-$arch.zip" > "$mock/SHA256SUMS"
+	fi
+	cat > "$mock/latest.json" <<JSON
+{"tag_name":"v9.9.9","prerelease":false,"assets":[
+{"name":"nivyx-macos-$arch.zip","browser_download_url":"http://127.0.0.1:$port/nivyx-macos-$arch.zip"},
+{"name":"SHA256SUMS","browser_download_url":"http://127.0.0.1:$port/SHA256SUMS"}]}
+JSON
+}
+mk_release "$mock/engine-good" good
+( cd "$mock" && exec python3 -m http.server "$port" --bind 127.0.0.1 >"$mock/httpd.log" 2>&1 ) &
+httpd=$!
+t=0
+until curl -fsS --max-time 3 "http://127.0.0.1:$port/latest.json" >/dev/null 2>&1 || [ $t -ge 15 ]; do sleep 1; t=$((t + 1)); done
+curl -fsS --max-time 3 "http://127.0.0.1:$port/latest.json" >/dev/null 2>&1 || {
+	echo "--- mock server ---"; python3 --version; cat "$mock/httpd.log"; lsof -nP -iTCP:"$port" 2>&1 | head -5
+	die "the local mock release server is not reachable"
+}
+NIVYX_RELEASE_API="http://127.0.0.1:$port/latest.json"
+upd() { sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update "$@"; }
+
+out="$(NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update --check)"; echo "$out"
+echo "$out" | grep -q 'Update available' || die "update --check did not report the newer release"
+[ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "update --check changed the installed version"
+
+mk_release "$mock/engine-good" bad
+upd >/tmp/upd.out 2>&1 && die "update accepted a wrong checksum"
+cat /tmp/upd.out; grep -q 'SHA-256 mismatch' /tmp/upd.out || die "no checksum diagnostic"
+[ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "bad checksum still changed the install"
+wait_running || die "service down after a rejected update"
+
+mk_release "$mock/engine-broken" good
+upd >/tmp/upd.out 2>&1 && die "update kept a release whose engine does not run"
+cat /tmp/upd.out
+[ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "broken release was not rolled back"
+wait_running || die "service down after rollback"
+c="$(fetch https://example.com/)"; ok "$c" || die "after rollback -> '$c'"
+
+cfg_before="$(sudo shasum -a 256 "$CONF" | cut -d' ' -f1)"
+mk_release "$mock/engine-good" good
+upd || die "a good update failed"
+[ "$(nivyx version | awk '{print $2}')" = 9.9.9 ] || die "version after update: $(nivyx version)"
+[ "$(sudo shasum -a 256 "$CONF" | cut -d' ' -f1)" = "$cfg_before" ] || die "update changed the config"
+wait_running || die "service down after update"
+c="$(fetch https://example.com/)"; ok "$c" || die "after update -> '$c'"
+kill "$httpd" 2>/dev/null || true
+rm -rf "$mock"
+pass "check ok; bad checksum rejected; broken release rolled back; good release installed ($current -> 9.9.9), config kept"
+
 stepn "uninstall leaves nothing behind"
 ( cd "$PKG" && sudo ./uninstall.sh ) || die "uninstall.sh failed"
 [ -e "/Library/LaunchDaemons/$LABEL.plist" ] && die "plist left"
 launchctl print "system/$LABEL" >/dev/null 2>&1 && die "launchd job left"
-for f in /usr/local/bin/dpi-proxy /usr/local/bin/nivyx /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl /usr/local/etc/dpi-proxy \
+for f in /usr/local/bin/dpi-proxy /usr/local/bin/nivyx /usr/local/etc/dpi-proxy \
 	/usr/local/var/dpi-proxy /var/run/dpi-proxy /var/log/dpi-proxy.log /var/log/dpi-proxy.stderr.log; do
 	[ -e "$f" ] && die "$f left"
 done
 # a new shell: this one still has the old location hashed
 /bin/sh -c 'command -v nivyx' >/dev/null && die "nivyx still on the PATH"
-/bin/sh -c 'command -v dpictl' >/dev/null && die "dpictl still on the PATH"
-/bin/sh -c 'command -v dpi-proxy-ctl' >/dev/null && die "dpi-proxy-ctl still on the PATH"
 pgrep -f '^/usr/local/bin/dpi-proxy' >/dev/null && die "a dpi-proxy process is left"
 anchor_empty || die "rules or tables left in $ANCHOR"
 sudo pfctl -s References 2>/dev/null | grep -q '[0-9]\{8,\}' && [ "$(sed -n 1p /tmp/dpi-e2e-pf-before.txt)" = Disabled ] \

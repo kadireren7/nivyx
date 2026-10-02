@@ -29,10 +29,9 @@ and networks. Field reports are welcome.
 4. Use Safari, Chrome, Firefox, Discord, … normally. No proxy
    settings, no manual DNS changes, no per-app configuration.
 
-The ZIP contains everything (`dpi-proxy`, `nivyx` (+ `dpictl`,
-`dpi-proxy-ctl` aliases), `Install Nivyx.command`,
+The ZIP contains everything (`dpi-proxy`, `nivyx`, `Install Nivyx.command`,
 `Uninstall Nivyx.command`, `install.sh`, `uninstall.sh`, the launchd
-job, LICENSE, `MACOS-QUICKSTART.txt`); no Xcode, Homebrew, Git or
+job, the man page and zsh completion, LICENSE, `MACOS-QUICKSTART.txt`); no Xcode, Homebrew, Git or
 Python is needed. Before testing, quit SpoofDPI, ByeDPI, zapret and
 VPN apps that filter traffic (`nivyx doctor` checks for the ones it
 can detect).
@@ -51,11 +50,10 @@ sudo nivyx start
 sudo nivyx restart
 ```
 
-`dpictl` and `dpi-proxy-ctl` still work with the same commands —
-compatibility aliases for `nivyx`. See [cli.md](cli.md) for the full
+See [cli.md](cli.md) for the full
 command reference (shared across platforms).
 
-Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/nivyx` (+ `dpictl`, `dpi-proxy-ctl` aliases),
+Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/nivyx`,
 `/Library/LaunchDaemons/io.github.kadireren7.dpi-proxy.plist`,
 `/usr/local/etc/dpi-proxy/strategy.conf`, log `/var/log/dpi-proxy.log`.
 
