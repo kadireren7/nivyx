@@ -808,8 +808,13 @@ do_repair() {
 	case "$(service_state)" in
 	running*)
 		okay "service is running"
+		n="$(pfctl -a "$ANCHOR" -s nat 2>/dev/null | grep -c '^rdr')"
 		if [ "$(field pf)" != enabled ] && [ -n "$(field pf)" ]; then
 			launchctl kickstart -k "system/$LABEL" && fixed "restarted the service: PF reported \"$(field pf)\""
+		elif [ "${n:-0}" -eq 0 ]; then
+			launchctl kickstart -k "system/$LABEL" && fixed "restarted the service: our PF anchor $ANCHOR had no redirect rules (removed externally)"
+		else
+			okay "PF anchor holds our redirect rules"
 		fi
 		;;
 	loaded)

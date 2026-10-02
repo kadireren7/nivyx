@@ -178,7 +178,7 @@ if ($out -match "`e\[") { Die 'NO_COLOR=1 but nivyx emitted a color escape code'
 Pass 'nivyx status/--help ran; NO_COLOR honored'
 
 Step 'one public command: no legacy wrappers installed'
-foreach ($old in 'nivyx.cmd', 'dpi-proxy-ctl.cmd', 'nivyx-impl.ps1') {
+foreach ($old in 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'dpictl-impl.ps1') {
     if (Test-Path (Join-Path $InstDir $old)) { Die "$old is still installed" }
 }
 if (-not (Test-Path (Join-Path $InstDir 'nivyx-impl.ps1'))) { Die 'nivyx-impl.ps1 missing' }

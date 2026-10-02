@@ -63,7 +63,7 @@ stepn "after the upgrade: nivyx, ghost commands, preserved state"
 new_version="$(nivyx version | awk '{print $2}')"
 [ "$new_version" = "$(cat "$ROOT/VERSION")" ] || die "nivyx reports $new_version, expected $(cat "$ROOT/VERSION")"
 [ "$new_version" != "$old_version" ] || die "version did not change ($new_version)"
-nivyx status | grep -q '^Service: Running' || die "nivyx status: not Running"
+out="$(nivyx status)"; echo "$out" | grep -q '^Service: Running' || die "nivyx status: not Running"
 [ -e /usr/local/bin/dpi-proxy-ctl ] && die "legacy dpi-proxy-ctl was not removed"
 [ -e /usr/local/bin/dpictl ] || die "the third-party dpictl was deleted"
 [ "$(/usr/local/bin/dpictl)" = "third-party tool" ] || die "the third-party dpictl was altered"
@@ -72,7 +72,7 @@ sudo rm -f /usr/local/bin/dpictl
 if [ "$decisions_before" -gt 0 ]; then
 	[ -s "$DECISIONS" ] || die "learned decisions were lost in the upgrade"
 fi
-nivyx strategy example.com | grep -q 'tlsrec (manual' || die "the manual rule no longer applies"
+out="$(nivyx strategy example.com)"; echo "$out" | grep -q 'tlsrec (manual' || die "the manual rule no longer applies"
 pass "version $old_version -> $new_version; dpi-proxy-ctl gone; foreign dpictl untouched; config and state intact"
 
 stepn "DNS, HTTPS, bypass, restart, doctor after the upgrade"
@@ -87,7 +87,7 @@ sleep 3
 systemctl is-active --quiet dpi-proxy-transparent || die "not active after nivyx restart"
 c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS after restart -> '$c'"
 nivyx doctor || die "doctor reported a failure"
-sudo nivyx repair | grep -q 'nothing else wrong' || die "repair found something wrong right after an upgrade"
+out="$(sudo nivyx repair)"; echo "$out" | grep -q 'nothing else wrong' || die "repair found something wrong right after an upgrade"
 pass "DNS over DoH, HTTPS, bypass rule, restart, doctor and repair all fine"
 
 stepn "uninstall removes everything of ours"

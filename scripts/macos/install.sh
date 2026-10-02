@@ -159,7 +159,7 @@ if [ $healthy -ne 1 ]; then
 fi
 
 echo
-log "Done. dpi-proxy is running and starts automatically at boot."
+log "Done. Nivyx is running and starts automatically at boot."
 echo "    HTTPS and DNS from all applications now go through the automatic"
 echo "    bypass; no proxy settings, no DNS changes, no per-app setup."
 echo

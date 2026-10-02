@@ -239,7 +239,7 @@ fi
 
 INSTALL_OK=1
 echo
-log "Done. Transparent mode is running and enabled at boot."
+log "Done. Nivyx is running and enabled at boot."
 echo
 echo "  HTTPS from all applications now goes through the automatic bypass,"
 echo "  and DNS is answered over DNS-over-HTTPS (no poisoned answers);"

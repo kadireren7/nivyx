@@ -381,9 +381,10 @@ out="$(sudo nivyx repair)"; echo "$out"
 echo "$out" | grep -q 'nothing else wrong' || die "repair on a healthy install reported something"
 sudo pfctl -a "$ANCHOR" -F nat >/dev/null 2>&1; sudo pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
 [ "$(anchor_rules)" -eq 0 ] || die "could not empty the anchor for the test"
-# the daemon's watchdog restores the rules by itself; whichever happens, the end state must be healthy
-sudo nivyx repair >/dev/null; wait_running || die "not running after repair"
-sleep 3
+out="$(sudo nivyx repair)"; echo "$out"
+echo "$out" | grep -q 'fixed' || die "repair did not notice the emptied anchor"
+wait_running || die "not running after repair"
+t=0; while [ $t -lt 20 ] && [ "$(anchor_rules)" -lt 4 ]; do sleep 1; t=$((t + 1)); done
 [ "$(anchor_rules)" -ge 4 ] || die "anchor rules missing after repair"
 sudo launchctl bootout "system/$LABEL" 2>/dev/null; sleep 2
 sudo pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1

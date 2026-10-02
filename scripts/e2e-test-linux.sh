@@ -171,6 +171,7 @@ pass "table restored, HTTPS $c"
 stepn "repair: service disabled, stopped, with a stale table and status file"
 sudo systemctl disable --now dpi-proxy-transparent >/dev/null 2>&1
 sudo nft add table inet dpi_proxy_tp
+sudo mkdir -p "$(dirname "$STATUS")"
 printf 'engine: running\n' | sudo tee "$STATUS" >/dev/null
 out="$(sudo nivyx repair)"; echo "$out"
 systemctl is-enabled --quiet dpi-proxy-transparent || die "repair did not re-enable the service"
