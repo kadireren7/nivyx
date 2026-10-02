@@ -99,10 +99,11 @@ try {
         try { return [BitConverter]::ToString($sha.ComputeHash($fs)) } finally { $fs.Dispose(); $sha.Dispose() }
     }
     foreach ($f in $need) {
-        $src = Join-Path $from $f
-        $dst = Join-Path $InstDir $f
-        if ((Test-Path $dst) -and ((Get-Sha256Of $src) -eq (Get-Sha256Of $dst))) { continue }
-        Copy-Item $src $InstDir -Force
+        # (not $src/$dst: PowerShell names are case-insensitive and $Src is the script folder)
+        $fromFile = Join-Path $from $f
+        $toFile = Join-Path $InstDir $f
+        if ((Test-Path $toFile) -and ((Get-Sha256Of $fromFile) -eq (Get-Sha256Of $toFile))) { continue }
+        Copy-Item $fromFile $InstDir -Force
     }
     foreach ($f in 'WinDivert-LICENSE.txt') {
         if (Test-Path (Join-Path $from $f)) { Copy-Item (Join-Path $from $f) $InstDir -Force }
