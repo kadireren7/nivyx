@@ -75,10 +75,35 @@ try {
         & sc.exe delete $Service | Out-Null
         Start-Sleep -Seconds 1
     }
+    # The WinDivert driver stays loaded after our service stops and keeps
+    # WinDivert64.sys locked, which would make an upgrade fail halfway.
+    # Unload it unless another WinDivert-based tool is using it.
+    $wdSvc = Get-Service WinDivert -ErrorAction SilentlyContinue
+    if ($wdSvc -and $wdSvc.Status -ne 'Stopped' -and
+        -not (Get-Process -Name goodbyedpi, winws -ErrorAction SilentlyContinue)) {
+        & sc.exe stop WinDivert | Out-Null
+        foreach ($i in 1..20) {
+            if ((Get-Service WinDivert -ErrorAction SilentlyContinue).Status -eq 'Stopped') { break }
+            Start-Sleep -Milliseconds 500
+        }
+    }
 
     Log "[3/6] Installing files to $InstDir ..."
     New-Item -ItemType Directory -Force -Path $InstDir, $DataDir | Out-Null
-    foreach ($f in $need) { Copy-Item (Join-Path $from $f) $InstDir -Force }
+    # Files identical to what is already installed are not rewritten (the
+    # unmodified WinDivert files never change between releases, and a copy
+    # over a still-loaded driver would fail).
+    function Get-Sha256Of([string]$path) {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $fs = [System.IO.File]::OpenRead($path)
+        try { return [BitConverter]::ToString($sha.ComputeHash($fs)) } finally { $fs.Dispose(); $sha.Dispose() }
+    }
+    foreach ($f in $need) {
+        $src = Join-Path $from $f
+        $dst = Join-Path $InstDir $f
+        if ((Test-Path $dst) -and ((Get-Sha256Of $src) -eq (Get-Sha256Of $dst))) { continue }
+        Copy-Item $src $InstDir -Force
+    }
     foreach ($f in 'WinDivert-LICENSE.txt') {
         if (Test-Path (Join-Path $from $f)) { Copy-Item (Join-Path $from $f) $InstDir -Force }
     }
