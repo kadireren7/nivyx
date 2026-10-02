@@ -71,7 +71,7 @@ function Get-VersionString {
 
 function Show-StatusShort {
     $ver = Get-VersionString
-    if ($ver) { WriteColor "Nivyx $ver" Cyan } else { WriteColor 'Nivyx (version unknown - dpi-proxy.exe not found)' Cyan }
+    if ($ver) { WriteColor "Nivyx $ver" Cyan } else { WriteColor 'Nivyx (version unknown - engine not found)' Cyan }
     $svc = Get-Service $Service -ErrorAction SilentlyContinue
     if (-not $svc) {
         Write-Host 'Service: Not installed'
@@ -721,7 +721,7 @@ function Doctor-Conflicts {
     if ($other) { $found += ($other | Select-Object -Expand Name -Unique) }
     if ($c -and $c -ne 'none') { $found += $c }
     if ($found.Count -gt 0) {
-        Check WARN ("conflicts: other DPI/interception tool(s) detected: " + ($found -join ', ') + " - dpi-proxy does not disable them; stop one manually")
+        Check WARN ("conflicts: other DPI/interception tool(s) detected: " + ($found -join ', ') + " - Nivyx does not disable them; stop one manually")
     } else {
         Check PASS 'conflicts: no other known DPI-bypass tool detected'
     }
@@ -732,7 +732,7 @@ function Doctor-Vpn {
         Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -match 'TAP|TUN|WireGuard|VPN|OpenVPN' }
     if ($adapters) {
         $names = ($adapters | Select-Object -Expand Name) -join ', '
-        Check WARN "vpn: active VPN/tunnel adapter(s) ($names) - if one filters HTTPS, it may interact with dpi-proxy"
+        Check WARN "vpn: active VPN/tunnel adapter(s) ($names) - if one filters HTTPS, it may interact with Nivyx"
     } else {
         Check PASS 'vpn: no active VPN/tunnel adapter detected'
     }
@@ -743,7 +743,7 @@ function Doctor-Stale {
     $wd = Get-Service WinDivert -ErrorAction SilentlyContinue
     if ($svc -and $svc.Status -eq 'Running') { Check PASS 'stale rules: service is running, nothing to check'; return }
     if ($wd -and $wd.Status -eq 'Running' -and (-not (Get-Process -Name goodbyedpi, winws -ErrorAction SilentlyContinue))) {
-        Check WARN 'stale rules: WinDivert driver still loaded although dpi-proxy is stopped and no other known WinDivert tool is running'
+        Check WARN 'stale rules: WinDivert driver still loaded although Nivyx is stopped and no other known WinDivert tool is running'
     } else {
         Check PASS 'stale rules: none found'
     }
@@ -964,7 +964,7 @@ switch ($Command) {
     'support-bundle' { Invoke-SupportBundle $Arg }
     'version'        {
         $ver = Get-VersionString
-        if ($ver) { Write-Host "Nivyx $ver" } else { Write-Host 'Nivyx (version unknown - dpi-proxy.exe not found)' }
+        if ($ver) { Write-Host "Nivyx $ver" } else { Write-Host 'Nivyx (version unknown - engine not found)' }
     }
     default    {
         Write-Host "Nivyx: unknown command '$Command' (see: nivyx --help)"

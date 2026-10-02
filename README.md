@@ -30,8 +30,7 @@ man-in-the-middles TLS.
 | Windows 10/11 (x64) | **Transparent automatic mode** | Real ISP/DPI field-tested |
 | macOS (Apple silicon, Intel) | **Transparent automatic mode** | Real ISP/DPI field-tested |
 
-`nivyx doctor` (or `dpi-proxy --capabilities`) prints what your
-install supports.
+`nivyx doctor` prints what your install supports.
 
 ## Install
 

@@ -44,7 +44,7 @@ for legacy in /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl; do
 	[ -f "$legacy" ] && [ ! -L "$legacy" ] && grep -q 'dpi-proxy' "$legacy" 2>/dev/null && rm -f "$legacy"
 done
 
-log "[3/4] Removing dpi-proxy's own nftables tables (if left over)..."
+log "[3/4] Removing Nivyx's own nftables tables (if left over)..."
 for t in dpi_proxy_tp dpi_proxy; do
 	if nft list table inet "$t" >/dev/null 2>&1; then
 		nft delete table inet "$t"
@@ -61,7 +61,7 @@ if [ "$PURGE" = 1 ]; then
 fi
 
 echo
-log "dpi-proxy removed."
+log "Nivyx removed."
 if [ -d "$CONF_DIR" ]; then
 	echo "Manual rules kept at $CONF_DIR (remove with: sudo $0 --purge)"
 fi

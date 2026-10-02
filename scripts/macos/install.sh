@@ -40,10 +40,10 @@ xattr -dr com.apple.quarantine "$HERE" 2>/dev/null || true
 
 log "[1/5] Checking the package..."
 if ! "$HERE/dpi-proxy" --version >/dev/null 2>&1; then
-	die "dpi-proxy does not run on this Mac ($(uname -m), macOS $(sw_vers -productVersion)); is this the package for this Mac's processor?"
+	die "Nivyx does not run on this Mac ($(uname -m), macOS $(sw_vers -productVersion)); is this the package for this Mac's processor?"
 fi
 "$HERE/dpi-proxy" --capabilities | grep -q '^transparent_mode: supported' \
-	|| die "this dpi-proxy binary was built without transparent mode"
+	|| die "this Nivyx engine was built without transparent mode"
 echo "    $("$HERE/dpi-proxy" --version), macOS $(sw_vers -productVersion), $(uname -m)"
 for p in tpws spoofdpi ciadpi byedpi; do
 	if pgrep -x "$p" >/dev/null 2>&1; then

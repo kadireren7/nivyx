@@ -133,7 +133,7 @@ remove_legacy_cli() {
 	done
 }
 
-log "[3/7] Stopping running dpi-proxy services for a clean (re)install..."
+log "[3/7] Stopping running Nivyx services for a clean (re)install..."
 systemctl stop "$TP_SERVICE" >/dev/null 2>&1 || true
 # Two engines on TCP/443 at once is never intended: transparent mode
 # replaces packet mode as the automatic engine. Packet mode stays
@@ -153,7 +153,7 @@ if nft list table ip dpibypass >/dev/null 2>&1 \
 	OTHER_ACTIVE=1
 	echo
 	err "the dpi-bypass service is active. Two transparent DPI tools at once"
-	err "proxy each other's traffic and break connections. dpi-proxy is"
+	err "proxy each other's traffic and break connections. Nivyx is"
 	err "installed anyway, but stop one of them:"
 	err "  sudo systemctl stop dpi-bypass            (until reboot)"
 	err "  sudo systemctl disable --now dpi-bypass   (permanently)"

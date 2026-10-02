@@ -6,7 +6,7 @@
 #
 # Stops the service and removes everything install.sh put on the
 # system: the launchd job, the binaries, the settings, learned
-# decisions, logs, dpi-proxy's PF anchor and its PF enable reference.
+# decisions, logs, Nivyx's PF anchor and its PF enable reference.
 # Nothing else is touched: other PF anchors, the main ruleset,
 # /etc/pf.conf and other programs' PF references stay as they are.
 set -u
@@ -43,7 +43,7 @@ for pid in $(pgrep -f '^/usr/local/bin/dpi-proxy' 2>/dev/null); do
 	kill -9 "$pid" 2>/dev/null || true
 done
 
-log "Removing dpi-proxy's PF rules (anchor $ANCHOR only)..."
+log "Removing Nivyx's PF rules (anchor $ANCHOR only)..."
 pfctl -a "$ANCHOR" -F nat >/dev/null 2>&1 || true
 pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1 || true
 pfctl -a "$ANCHOR" -F Tables >/dev/null 2>&1 || true
@@ -88,6 +88,6 @@ if [ -n "$left" ]; then
 	echo "uninstall.sh: could not remove:$left" >&2
 	exit 1
 fi
-log "dpi-proxy is uninstalled; networking is back to normal."
+log "Nivyx is uninstalled; networking is back to normal."
 echo "    (macOS keeps the now empty PF anchor name $ANCHOR registered until"
 echo "    the next restart; it contains no rules and does nothing.)"

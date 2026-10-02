@@ -76,7 +76,7 @@ service_state() {
 
 status_short() {
 	ver="$(version_string)"
-	echo "${C_CYAN}Nivyx ${ver:-'(version unknown - dpi-proxy not found)'}${C_RESET}"
+	echo "${C_CYAN}Nivyx ${ver:-'(version unknown - engine not found)'}${C_RESET}"
 	st="$(service_state)"
 	case "$st" in
 	running*) echo "Service: ${C_GREEN}Running${C_RESET}" ;;
@@ -397,7 +397,7 @@ doctor_permissions() {
 	if [ -x "$BIN" ]; then
 		check PASS "permissions: $BIN is present and executable"
 	else
-		check FAIL "permissions: dpi-proxy binary not found at $BIN"
+		check FAIL "permissions: Nivyx engine not found at $BIN"
 	fi
 }
 
@@ -451,7 +451,7 @@ doctor_reachability() {
 }
 
 doctor_bypass() {
-	[ -x "$BIN" ] || { check WARN "bypass path: dpi-proxy binary not found"; return; }
+	[ -x "$BIN" ] || { check WARN "bypass path: Nivyx engine not found"; return; }
 	if "$BIN" --capabilities 2>/dev/null | grep -q '^transparent_mode: supported'; then
 		check PASS "bypass path: this binary supports transparent mode"
 	else
@@ -467,7 +467,7 @@ doctor_conflicts() {
 	c="$(field conflict)"
 	[ -n "$c" ] && [ "$c" != none ] && found="$found $c"
 	if [ -n "$found" ]; then
-		check WARN "conflicts: other DPI/interception tool(s) detected:$found — dpi-proxy does not disable them; stop one manually"
+		check WARN "conflicts: other DPI/interception tool(s) detected:$found — Nivyx does not disable them; stop one manually"
 	else
 		check PASS "conflicts: no other known DPI-bypass tool detected"
 	fi
@@ -480,7 +480,7 @@ doctor_vpn() {
 		ifconfig "$i" 2>/dev/null | grep -q 'inet ' && active="$active $i"
 	done
 	if [ -n "$active" ]; then
-		check WARN "vpn: active tunnel interface(s)$active — if one filters HTTPS, it may interact with dpi-proxy"
+		check WARN "vpn: active tunnel interface(s)$active — if one filters HTTPS, it may interact with Nivyx"
 	else
 		check PASS "vpn: no active VPN/tunnel interface detected"
 	fi
@@ -1064,7 +1064,7 @@ doctor) doctor ;;
 support-bundle) support_bundle "${1:-}" ;;
 version)
 	ver="$(version_string)"
-	echo "Nivyx ${ver:-'(version unknown - dpi-proxy not found)'}"
+	echo "Nivyx ${ver:-'(version unknown - engine not found)'}"
 	;;
 -h | --help) usage ;;
 help) help_cmd "${1:-}" ;;

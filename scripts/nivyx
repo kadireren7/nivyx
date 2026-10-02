@@ -122,7 +122,7 @@ version_string() {
 status_short() {
 	local ver svc engine table protection dns_state fails bypassed
 	ver="$(version_string)"
-	echo "${C_CYAN}Nivyx ${ver:-(version unknown — dpi-proxy not found)}${C_RESET}"
+	echo "${C_CYAN}Nivyx ${ver:-(version unknown — engine not found)}${C_RESET}"
 
 	svc="inactive"
 	have systemctl && svc="$(systemctl is-active "$TP_SERVICE" 2>/dev/null || true)"
@@ -485,7 +485,7 @@ doctor_reachability() {
 
 doctor_bypass() {
 	local bin caps
-	bin="$(find_binary)" || { check WARN "bypass path: dpi-proxy binary not found"; return; }
+	bin="$(find_binary)" || { check WARN "bypass path: Nivyx engine not found"; return; }
 	caps="$("$bin" --capabilities 2>/dev/null || true)"
 	if echo "$caps" | grep -q '^transparent_mode: supported'; then
 		check PASS "bypass path: this binary supports transparent mode"
@@ -519,7 +519,7 @@ doctor_conflicts() {
 		done || true)"
 	[ -n "$other" ] && found="$found nftables-table:($other)"
 	if [ -n "$found" ]; then
-		check WARN "conflicts: other DPI/interception tool(s) detected:$found — dpi-proxy does not disable them; stop one manually"
+		check WARN "conflicts: other DPI/interception tool(s) detected:$found — Nivyx does not disable them; stop one manually"
 	else
 		check PASS "conflicts: no other known DPI-bypass tool detected"
 	fi
@@ -530,7 +530,7 @@ doctor_vpn() {
 	ifaces="$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^(tun|tap|wg)[0-9]*$' || true)"
 	if [ -n "$ifaces" ]; then
 		iflist="$(printf '%s' "$ifaces" | tr '\n' ' ' | sed 's/ *$//')"
-		check WARN "vpn: VPN/tunnel interface(s) present ($iflist) — if it also filters HTTPS, it may interact with dpi-proxy"
+		check WARN "vpn: VPN/tunnel interface(s) present ($iflist) — if it also filters HTTPS, it may interact with Nivyx"
 	else
 		check PASS "vpn: no VPN/tunnel interface detected"
 	fi
@@ -556,7 +556,7 @@ doctor_permissions() {
 	if bin="$(find_binary)" && [ -x "$bin" ]; then
 		check PASS "permissions: $bin is present and executable"
 	else
-		check FAIL "permissions: dpi-proxy binary not found in PATH or /usr/local/bin"
+		check FAIL "permissions: Nivyx engine not found in PATH or /usr/local/bin"
 	fi
 }
 
@@ -1239,7 +1239,7 @@ support-bundle)
 	;;
 version)
 	ver="$(version_string)"
-	echo "Nivyx ${ver:-(version unknown — dpi-proxy not found)}"
+	echo "Nivyx ${ver:-(version unknown — engine not found)}"
 	;;
 packet)
 	packet_cmd "$@"

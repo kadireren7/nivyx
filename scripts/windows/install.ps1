@@ -62,9 +62,9 @@ foreach ($f in $need) {
 }
 
 Log '[1/6] Third-party component notice'
-Write-Host '  dpi-proxy uses the WinDivert driver (signed, LGPLv3/GPLv2,'
+Write-Host '  Nivyx uses the WinDivert driver (signed, LGPLv3/GPLv2,'
 Write-Host '  https://reqrypt.org/windivert.html) to redirect this machine''s own'
-Write-Host '  outgoing HTTPS and DNS to the local dpi-proxy service. It does not'
+Write-Host '  outgoing HTTPS and DNS to the local Nivyx service. It does not'
 Write-Host '  decrypt anything and does not send traffic to any remote server.'
 
 $installed = $false
