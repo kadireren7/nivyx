@@ -154,7 +154,14 @@ printf 'this is not valid\n' | sudo tee -a "$CONF" >/dev/null
 nivyx config check && die "config check missed a broken line"
 sudo cp -p /tmp/nivyx-conf.orig "$CONF"
 sudo systemctl reload dpi-proxy-transparent
-pass "stats/config/diagnose/help behave; manual config preserved"
+# a corrupt config must never stop the service or the internet
+printf 'garbage line\n[nonsense]\nx = y\n' | sudo tee -a "$CONF" >/dev/null
+sudo systemctl restart dpi-proxy-transparent; sleep 3
+systemctl is-active --quiet dpi-proxy-transparent || die "the service does not start with a corrupt config"
+c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS with a corrupt config -> '$c'"
+sudo cp -p /tmp/nivyx-conf.orig "$CONF"
+sudo systemctl restart dpi-proxy-transparent; sleep 3
+pass "stats/config/diagnose/help behave; manual config preserved; a corrupt config does not stop the service"
 
 stepn "repair: nothing wrong on a healthy install"
 out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out"
@@ -182,6 +189,11 @@ pass "enabled, started, stale state cleared, HTTPS $c"
 stepn "repair: damaged learned-decision file"
 sudo systemctl stop dpi-proxy-transparent
 printf '# header\nbroken line\nexample.org %s 4 tlsrec original 1790000000\n' "0123456789abcdef" | sudo tee /var/lib/dpi-proxy/tp-decisions.conf >/dev/null
+# the engine itself must start with the damaged file (fail-safe, not fail-closed)
+sudo systemctl start dpi-proxy-transparent; sleep 3
+systemctl is-active --quiet dpi-proxy-transparent || die "the engine does not start with a damaged decision file"
+c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS with a damaged decision file -> '$c'"
+sudo systemctl stop dpi-proxy-transparent
 out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out"
 echo "$out" | grep -q 'damaged' || die "repair did not report the damaged line"
 grep -q 'broken line' /var/lib/dpi-proxy/tp-decisions.conf && die "damaged line still present"
