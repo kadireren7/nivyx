@@ -38,10 +38,21 @@ function WriteColor([string]$Text, [string]$ColorName) {
     else { Write-Host $Text }
 }
 
+# Plain .NET read (shared with the writer), not Select-String: status
+# reads a dozen fields and the cmdlet costs milliseconds per call.
 function Field($name) {
     if (-not (Test-Path $StatusFile)) { return '' }
-    $m = Select-String -Path $StatusFile -Pattern "^${name}: (.*)$" | Select-Object -First 1
-    if ($m) { return $m.Matches[0].Groups[1].Value } else { return '' }
+    $prefix = "${name}: "
+    try {
+        $fs = [System.IO.File]::Open($StatusFile, 'Open', 'Read', 'ReadWrite')
+        $sr = New-Object System.IO.StreamReader($fs)
+        try {
+            while ($null -ne ($line = $sr.ReadLine())) {
+                if ($line.StartsWith($prefix)) { return $line.Substring($prefix.Length) }
+            }
+        } finally { $sr.Dispose() }
+    } catch { }
+    return ''
 }
 
 function Is-Elevated {
