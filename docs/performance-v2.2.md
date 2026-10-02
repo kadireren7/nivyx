@@ -33,7 +33,7 @@ installed v2.1.0 service running), 20–30 runs each.
 | `nivyx status --verbose` (Linux, local) | 137 ms | **83 ms** | same two improvements |
 | `nivyx stats` (new, Linux, local) | — | 38 ms | |
 | CLI size on Linux | 22.9 KB | 47.3 KB | the new commands (update, repair, stats, config, layered diagnose, help) |
-| CLI files installed on Linux | 3 (`dpictl`, `dpi-proxy-ctl`, `nivyx`: 46.5 KB) | 1 (`nivyx`: 47.3 KB) | the aliases are gone |
+| CLI files installed on Linux | 3 (`nivyx` plus the two legacy aliases: 46.5 KB) | 1 (`nivyx`: 47.3 KB) | the aliases are gone |
 | Linux installed man page / completions | none | 1.7 KB + 3 small files | |
 
 ## Packages
