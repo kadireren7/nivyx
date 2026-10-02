@@ -167,6 +167,12 @@ install -m 0755 "$PROJECT_ROOT/dpi-proxy" "$BIN_DEST"
 command -v strip >/dev/null 2>&1 && strip "$BIN_DEST" 2>/dev/null || true
 install -m 0755 "$PROJECT_ROOT/scripts/nivyx" "$NIVYX_DEST"
 remove_legacy_cli
+# man page and shell completions (best effort; harmless if the shell is absent)
+install -d /usr/local/share/man/man1
+install -m 0644 "$PROJECT_ROOT/scripts/nivyx.1" /usr/local/share/man/man1/nivyx.1
+install -D -m 0644 "$PROJECT_ROOT/scripts/completions/nivyx.bash" /usr/share/bash-completion/completions/nivyx
+install -D -m 0644 "$PROJECT_ROOT/scripts/completions/_nivyx" /usr/local/share/zsh/site-functions/_nivyx
+install -D -m 0644 "$PROJECT_ROOT/scripts/completions/nivyx.fish" /usr/share/fish/vendor_completions.d/nivyx.fish
 if [ "$WITH_PACKET" = 1 ]; then
 	install -m 0755 "$PROJECT_ROOT/dpi-proxy-packet" "$PACKET_BIN_DEST"
 fi

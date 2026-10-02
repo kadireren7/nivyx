@@ -37,6 +37,8 @@ systemctl daemon-reload
 log "[2/4] Removing binaries..."
 # shellcheck disable=SC2086
 rm -f $BINS
+rm -f /usr/local/share/man/man1/nivyx.1 /usr/share/bash-completion/completions/nivyx \
+	/usr/local/share/zsh/site-functions/_nivyx /usr/share/fish/vendor_completions.d/nivyx.fish
 # v2.1 and earlier command names, only if they are our own scripts
 for legacy in /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl; do
 	[ -f "$legacy" ] && [ ! -L "$legacy" ] && grep -q 'dpi-proxy' "$legacy" 2>/dev/null && rm -f "$legacy"
