@@ -87,7 +87,7 @@ sleep 3
 systemctl is-active --quiet dpi-proxy-transparent || die "not active after nivyx restart"
 c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS after restart -> '$c'"
 nivyx doctor || die "doctor reported a failure"
-out="$(sudo nivyx repair)"; echo "$out" | grep -q 'nothing else wrong' || die "repair found something wrong right after an upgrade"
+out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out" | grep -q 'nothing else wrong' || die "repair found something wrong right after an upgrade"
 pass "DNS over DoH, HTTPS, bypass rule, restart, doctor and repair all fine"
 
 stepn "uninstall removes everything of ours"

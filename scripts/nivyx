@@ -401,7 +401,7 @@ doctor_service() {
 		check WARN "service: systemctl not found — cannot check"
 		return
 	fi
-	if ! systemctl list-unit-files 2>/dev/null | grep -q "^$TP_SERVICE.service"; then
+	if ! systemctl cat "$TP_SERVICE" >/dev/null 2>&1; then
 		check WARN "service: $TP_SERVICE is not installed"
 		return
 	fi
@@ -821,7 +821,7 @@ repair() {
 	echo "$SELF repair: checking Nivyx-owned state"
 	echo
 
-	if ! systemctl list-unit-files 2>/dev/null | grep -q "^$TP_SERVICE.service"; then
+	if ! systemctl cat "$TP_SERVICE" >/dev/null 2>&1; then
 		cannot "service unit $TP_SERVICE is not installed; re-run scripts/install.sh from the Nivyx folder"
 		echo
 		echo "Nothing else can be repaired without the unit."

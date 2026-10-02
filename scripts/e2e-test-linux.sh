@@ -157,12 +157,12 @@ sudo systemctl reload dpi-proxy-transparent
 pass "stats/config/diagnose/help behave; manual config preserved"
 
 stepn "repair: nothing wrong on a healthy install"
-out="$(sudo nivyx repair)"; echo "$out"
+out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out"
 echo "$out" | grep -q 'nothing else wrong' || die "repair on a healthy install reported something"
 
 stepn "repair: firewall table removed externally"
 sudo nft delete table inet dpi_proxy_tp || die "could not delete the table"
-out="$(sudo nivyx repair)"; echo "$out"
+out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out"
 echo "$out" | grep -q 'fixed' || die "repair fixed nothing"
 sudo nft list table inet dpi_proxy_tp >/dev/null || die "repair did not restore the table"
 c="$(fetch https://example.com/)"; ok "$c" || die "after repair -> '$c'"
@@ -173,7 +173,7 @@ sudo systemctl disable --now dpi-proxy-transparent >/dev/null 2>&1
 sudo nft add table inet dpi_proxy_tp
 sudo mkdir -p "$(dirname "$STATUS")"
 printf 'engine: running\n' | sudo tee "$STATUS" >/dev/null
-out="$(sudo nivyx repair)"; echo "$out"
+out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out"
 systemctl is-enabled --quiet dpi-proxy-transparent || die "repair did not re-enable the service"
 systemctl is-active --quiet dpi-proxy-transparent || die "repair did not start the service"
 c="$(fetch https://example.com/)"; ok "$c" || die "after repair -> '$c'"
@@ -182,7 +182,7 @@ pass "enabled, started, stale state cleared, HTTPS $c"
 stepn "repair: damaged learned-decision file"
 sudo systemctl stop dpi-proxy-transparent
 printf '# header\nbroken line\nexample.org %s 4 tlsrec original 1790000000\n' "0123456789abcdef" | sudo tee /var/lib/dpi-proxy/tp-decisions.conf >/dev/null
-out="$(sudo nivyx repair)"; echo "$out"
+out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out"
 echo "$out" | grep -q 'damaged' || die "repair did not report the damaged line"
 grep -q 'broken line' /var/lib/dpi-proxy/tp-decisions.conf && die "damaged line still present"
 c="$(fetch https://example.com/)"; ok "$c" || die "after repair -> '$c'"

@@ -497,6 +497,15 @@ function Invoke-Repair {
 # a failed health check restores the previous version.
 # NIVYX_RELEASE_API overrides the endpoint (test suite only; announced).
 
+# .NET instead of Get-FileHash: that cmdlet failed to load when Windows
+# PowerShell was started from pwsh (inherited PSModulePath) in CI.
+function Get-Sha256([string]$path) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $fs = [System.IO.File]::OpenRead($path)
+    try { return ([BitConverter]::ToString($sha.ComputeHash($fs)) -replace '-', '').ToLower() }
+    finally { $fs.Dispose(); $sha.Dispose() }
+}
+
 function Test-NewerVersion([string]$latest, [string]$current) {
     try { return ([version]$latest -gt [version]$current) } catch { return $false }
 }
@@ -510,6 +519,7 @@ function Test-UpdateHealthy {
 }
 
 function Invoke-Update([bool]$checkOnly) {
+    $ErrorActionPreference = 'Stop'
     $api = 'https://api.github.com/repos/kadireren7/nivyx/releases/latest'
     $official = 'https://github.com/kadireren7/nivyx/releases/download/'
     if ($env:NIVYX_RELEASE_API) { $api = $env:NIVYX_RELEASE_API; Write-Host "note: using update source $api" }
@@ -550,7 +560,7 @@ function Invoke-Update([bool]$checkOnly) {
         foreach ($l in (Get-Content $sumFile)) {
             if ($l -match '^([0-9a-fA-F]{64})\s+\*?(.+)$' -and $Matches[2].Trim() -eq $assetName) { $want = $Matches[1].ToLower() }
         }
-        $got = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+        $got = (Get-Sha256 $zip)
         if (-not $want -or $want -ne $got) {
             Write-Host "nivyx: SHA-256 mismatch for $assetName (expected $(if ($want) { $want } else { '<none listed>' }), got $got); nothing was installed"
             exit 1
@@ -584,7 +594,7 @@ function Invoke-Update([bool]$checkOnly) {
         $changedDriver = $false
         foreach ($f in 'WinDivert.dll', 'WinDivert64.sys') {
             $np = Join-Path $pkg $f; $op = Join-Path $InstDir $f
-            if ((Test-Path $np) -and (-not (Test-Path $op) -or (Get-FileHash $np).Hash -ne (Get-FileHash $op).Hash)) { $changedDriver = $true }
+            if ((Test-Path $np) -and (-not (Test-Path $op) -or (Get-Sha256 $np) -ne (Get-Sha256 $op))) { $changedDriver = $true }
         }
         if ($changedDriver) { & sc.exe stop WinDivert | Out-Null; Start-Sleep -Seconds 1 }
         $copyOk = $true
@@ -592,14 +602,14 @@ function Invoke-Update([bool]$checkOnly) {
             foreach ($f in $files + 'WinDivert.dll', 'WinDivert64.sys') {
                 $np = Join-Path $pkg $f; $op = Join-Path $InstDir $f
                 if (Test-Path $np) {
-                    if (($f -in @('WinDivert.dll', 'WinDivert64.sys')) -and (Test-Path $op) -and (Get-FileHash $np).Hash -eq (Get-FileHash $op).Hash) { continue }
+                    if (($f -in @('WinDivert.dll', 'WinDivert64.sys')) -and (Test-Path $op) -and (Get-Sha256 $np) -eq (Get-Sha256 $op)) { continue }
                     Copy-Item $np $op -Force -ErrorAction Stop
                 }
             }
             # nivyx.cmd is read by cmd.exe while it runs: replace it only
             # after this process has exited
             $newCmd = Join-Path $pkg 'nivyx.cmd'; $curCmd = Join-Path $InstDir 'nivyx.cmd'
-            if ((Test-Path $newCmd) -and (Get-FileHash $newCmd).Hash -ne (Get-FileHash $curCmd).Hash) {
+            if ((Test-Path $newCmd) -and (Get-Sha256 $newCmd) -ne (Get-Sha256 $curCmd)) {
                 $staged = Join-Path $InstDir 'nivyx.cmd.new'
                 Copy-Item $newCmd $staged -Force
                 Start-Process -WindowStyle Hidden cmd.exe "/c timeout /t 3 >nul & move /y `"$staged`" `"$curCmd`" >nul"
@@ -926,7 +936,10 @@ switch ($Command) {
     'stats'          { Show-Stats }
     'config'         { Invoke-Config $Arg $Arg2 $Arg3 }
     'repair'         { Invoke-Repair }
-    'update'         { Invoke-Update $CheckOnly }
+    'update'         {
+        try { Invoke-Update $CheckOnly }
+        catch { Write-Host "nivyx: update failed: $($_.Exception.Message)"; exit 1 }
+    }
     'reload'         {
         if (-not (Is-Elevated)) { Write-Host 'nivyx: reload needs an elevated (Administrator) terminal'; exit 1 }
         # the engine reads manual rules at startup; restarting is the reload
