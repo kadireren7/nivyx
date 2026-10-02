@@ -31,7 +31,7 @@ and networks. Field reports are welcome.
 
 The ZIP contains everything (`dpi-proxy`, `nivyx`, `Install Nivyx.command`,
 `Uninstall Nivyx.command`, `install.sh`, `uninstall.sh`, the launchd
-job, LICENSE, `MACOS-QUICKSTART.txt`); no Xcode, Homebrew, Git or
+job, the man page and zsh completion, LICENSE, `MACOS-QUICKSTART.txt`); no Xcode, Homebrew, Git or
 Python is needed. Before testing, quit SpoofDPI, ByeDPI, zapret and
 VPN apps that filter traffic (`nivyx doctor` checks for the ones it
 can detect).

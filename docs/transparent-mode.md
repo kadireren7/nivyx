@@ -244,3 +244,11 @@ link-local) takes the same path to the forwarder on port 1053.
   `nivyx status` shows it; stop one of them.
 - Blocking by IP address, or DPI that reassembles TLS records, cannot
   be bypassed this way.
+- **Linux and Windows: names only the router answers.** The forwarder
+  cannot tell which server a redirected query was meant for there (that
+  is macOS-only), so LAN names such as `printer.lan` get the DoH answer
+  (NXDOMAIN); put them in the hosts file. For a captive portal, run
+  `nivyx stop`, log in, then `nivyx start`. Details:
+  [audit-v2.2.md](audit-v2.2.md).
+- **IPv6** is covered by unit tests and field use, but CI runners have
+  no IPv6 connectivity, so it is not exercised end to end in CI.
