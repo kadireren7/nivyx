@@ -41,14 +41,14 @@ installed v2.1.0 service running), 20–30 runs each.
 | Asset | v2.1.0 | v2.2.0 |
 |---|---|---|
 | `nivyx-linux-x86_64` (engine only) | 113,312 B | 113,312 B |
-| `nivyx-linux-x86_64.tar.gz` (engine + CLI, used by `nivyx update`) | — | ~60 KB |
-| `nivyx-windows-x86_64.zip` | 2,377,037 B | see release page |
-| `nivyx-macos-arm64.zip` | 2,225,874 B | see release page |
-| `nivyx-macos-x86_64.zip` | 1,926,507 B | see release page |
+| `nivyx-linux-x86_64.tar.gz` (engine + CLI, used by `nivyx update`) | — | 60,845 B (59 KB) |
+| `nivyx-windows-x86_64.zip` | 2,377,037 B | 2,386,320 B (2.3 MB) |
+| `nivyx-macos-arm64.zip` | 2,225,874 B | 2,227,938 B (2.1 MB) |
+| `nivyx-macos-x86_64.zip` | 1,926,507 B | 1,928,579 B (1.8 MB) |
+| `nivyx-2.2.0.spdx.json` (SBOM) | — | 4,070 B |
+| `SHA256SUMS` | 353 B | 533 B |
 
-(The final v2.2.0 sizes are recorded in the release notes' asset list;
-they differ from 2.1 only by the larger CLI scripts, the man page and
-completions, minus the removed aliases.)
+The v2.2.0 packages are slightly larger than 2.1 only because of the larger CLI scripts, the man page and completions, minus the removed aliases.
 
 ## What was not optimized, and why
 

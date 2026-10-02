@@ -34,47 +34,35 @@ man-in-the-middles TLS.
 
 ## Install
 
-<table>
-<tr>
-<td valign="top" width="33%">
+### Linux
 
-**Linux**
-
-```
+```bash
 git clone https://github.com/kadireren7/nivyx.git
 cd nivyx
 sudo ./scripts/install.sh
 ```
 
-[Guide](docs/linux.md)
+[Linux guide](docs/linux.md)
 
-</td>
-<td valign="top" width="33%">
+### Windows
 
-**Windows 10/11**
+1. Download `nivyx-windows-x86_64.zip` from [Releases](https://github.com/kadireren7/nivyx/releases/latest).
+2. Extract it.
+3. Double-click **Install Nivyx.cmd**.
+4. Accept the UAC prompt.
 
-1. Download `nivyx-windows-x86_64.zip`
-2. Extract it
-3. Double-click **Install Nivyx.cmd**
-4. Accept the UAC prompt
+[Windows guide](docs/windows.md)
 
-[Guide](docs/windows.md)
+### macOS
 
-</td>
-<td valign="top" width="33%">
+1. Download the correct ZIP from [Releases](https://github.com/kadireren7/nivyx/releases/latest):
+   - Apple silicon (M1/M2/M3/M4/...): `nivyx-macos-arm64.zip`
+   - Intel Mac: `nivyx-macos-x86_64.zip`
+2. Extract it.
+3. Double-click **Install Nivyx.command**.
+4. Enter your password when asked.
 
-**macOS**
-
-1. Download the ZIP for your Mac (`arm64` = Apple silicon, `x86_64` = Intel)
-2. Extract it
-3. Double-click **Install Nivyx.command**
-4. Enter your password
-
-[Guide](docs/macos.md)
-
-</td>
-</tr>
-</table>
+[macOS guide](docs/macos.md)
 
 Each installer checks DNS and HTTPS through the service before it
 finishes, enables it at boot, and ends with `Nivyx is running.` —
@@ -87,6 +75,24 @@ SPDX SBOM and signed build provenance (`gh attestation verify <file>
 --repo kadireren7/nivyx`). Piping a downloaded script into a root shell
 is deliberately not offered: the Linux installer builds from the source
 you cloned, so you can read what it runs.
+
+## Downloads
+
+Most people need just one file: the Windows ZIP, or the macOS ZIP for their Mac. On Linux, use the install steps above.
+
+| File | For |
+|---|---|
+| `nivyx-linux-x86_64` | Linux x86_64 standalone engine binary |
+| `nivyx-linux-x86_64.tar.gz` | Linux packaged build used by `nivyx update` |
+| `nivyx-windows-x86_64.zip` | Windows 10/11 x64 |
+| `nivyx-macos-arm64.zip` | Apple silicon Macs |
+| `nivyx-macos-x86_64.zip` | Intel Macs |
+| `SHA256SUMS` | SHA-256 integrity verification |
+| `nivyx-2.2.x.spdx.json` | SBOM / dependency inventory |
+
+An SBOM is a machine-readable list of software components and dependencies. You only need it, `SHA256SUMS` or the source archives if you want to verify a download or develop Nivyx.
+
+GitHub also automatically provides *Source code (zip)* and *Source code (tar.gz)*. These are source archives for developers, not normal installation packages.
 
 ## Usage
 

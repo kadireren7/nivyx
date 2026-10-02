@@ -239,10 +239,13 @@ $port = 18765
 $current = ((& $nv version 2>&1 | Out-String).Trim() -replace '^Nivyx\s+', '')
 # an engine that claims to be 9.9.9: the real one with the version string patched
 $bytes = [IO.File]::ReadAllBytes((Join-Path $InstDir 'dpi-proxy.exe'))
-$from = [Text.Encoding]::ASCII.GetBytes('2.2.0'); $to = [Text.Encoding]::ASCII.GetBytes('9.9.9')
+$curVer = ((& (Join-Path $InstDir 'dpi-proxy.exe') --version 2>&1 | Out-String).Trim() -replace '^dpi-proxy\s+', '')
+$from = [Text.Encoding]::ASCII.GetBytes($curVer); $to = [Text.Encoding]::ASCII.GetBytes('9.9.9')
 $patched = 0
-for ($i = 0; $i -le $bytes.Length - 5; $i++) {
-    if ($bytes[$i] -eq $from[0] -and $bytes[$i+1] -eq $from[1] -and $bytes[$i+2] -eq $from[2] -and $bytes[$i+3] -eq $from[3] -and $bytes[$i+4] -eq $from[4]) {
+for ($i = 0; $i -le $bytes.Length - $from.Length; $i++) {
+    $same = $true
+    for ($k = 0; $k -lt $from.Length; $k++) { if ($bytes[$i+$k] -ne $from[$k]) { $same = $false; break } }
+    if ($same) {
         for ($k = 0; $k -lt 5; $k++) { $bytes[$i+$k] = $to[$k] }
         $patched++
     }
