@@ -12,6 +12,8 @@ install -m 0755 "$ROOT/dpi-proxy" "$PKG/dpi-proxy"
 strip "$PKG/dpi-proxy"
 install -m 0755 "$ROOT/scripts/nivyx" "$PKG/nivyx"
 install -m 0644 "$ROOT/scripts/nivyx.1" "$PKG/nivyx.1"
+mkdir -p "$PKG/completions"
+install -m 0644 "$ROOT"/scripts/completions/nivyx.bash "$ROOT"/scripts/completions/_nivyx "$ROOT"/scripts/completions/nivyx.fish "$PKG/completions/"
 install -m 0644 "$ROOT/LICENSE" "$PKG/LICENSE"
 tar -C "$OUT" -czf "$OUT/nivyx-linux-x86_64.tar.gz" nivyx-linux-x86_64
 ls -l "$OUT"
