@@ -196,7 +196,7 @@ function Show-Diagnose($domain, [bool]$verbose) {
         Where-Object { $_.IPAddress } | ForEach-Object { $_.IPAddress } | Sort-Object -Unique)
     $trusted = @()
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $j = Invoke-RestMethod -Uri "https://cloudflare-dns.com/dns-query?name=$domain&type=A" `
             -Headers @{ accept = 'application/dns-json' } -TimeoutSec 8 -UseBasicParsing
         $trusted = @($j.Answer | Where-Object { $_.type -eq 1 } | ForEach-Object { $_.data } | Sort-Object -Unique)
@@ -534,7 +534,7 @@ function Invoke-Update([bool]$checkOnly) {
     $api = 'https://api.github.com/repos/kadireren7/nivyx/releases/latest'
     $official = 'https://github.com/kadireren7/nivyx/releases/download/'
     if ($env:NIVYX_RELEASE_API) { $api = $env:NIVYX_RELEASE_API; Write-Host "note: using update source $api" }
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $current = Get-VersionString
     try {
         $rel = Invoke-RestMethod -Uri $api -UseBasicParsing -TimeoutSec 20 `
