@@ -248,7 +248,7 @@ cat /tmp/upd.out
 systemctl is-active --quiet dpi-proxy-transparent || die "service down after rollback"
 c="$(fetch https://example.com/)"; ok "$c" || die "after rollback -> '$c'"
 
-cfg_sudo cp -p "$CONF" /tmp/nivyx-conf.orig
+cfg_before="$(sudo sha256sum "$CONF" | cut -d' ' -f1)"
 mk_release "$mock/engine-good" good 99.0.0
 upd || die "a good update failed"
 [ "$(nivyx version | awk '{print $2}')" = 99.0.0 ] || die "version after update: $(nivyx version)"
