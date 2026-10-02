@@ -398,7 +398,8 @@ mock="$(mktemp -d /tmp/nivyx-mock.XXXXXX)"; port=18765
 arch="$(uname -m)"
 current="$(nivyx version | awk '{print $2}')"
 # an engine that claims to be 9.9.9: the real one with the version string patched
-LC_ALL=C sed 's/2\.2\.0/9.9.9/g' /usr/local/bin/dpi-proxy > "$mock/engine-good"
+curver="$(/usr/local/bin/dpi-proxy --version | awk '{print $2}')"
+LC_ALL=C sed "s/$(printf '%s' "$curver" | sed 's/\./\\./g')/9.9.9/g" /usr/local/bin/dpi-proxy > "$mock/engine-good"
 chmod +x "$mock/engine-good"; codesign --force -s - "$mock/engine-good" >/dev/null 2>&1
 "$mock/engine-good" --version | grep -q '9\.9\.9' || die "could not build the 9.9.9 test engine ($("$mock/engine-good" --version))"
 cat > "$mock/engine-broken" <<'BROKEN'
