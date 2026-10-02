@@ -148,3 +148,50 @@ server closes the connection right after the split write), while
 leaving other hosts unaffected. Enable it only if you've verified it
 actually helps for the sites you care about, on your own network —
 otherwise it will make things worse, not better.
+
+## Legacy internal identifiers (v2.2)
+
+`nivyx` is the only public command. Some internal identifiers keep their
+pre-rebrand names on purpose, because renaming them would need a
+migration of live services, kernel objects and user data for no user
+benefit:
+
+| Identifier | Where | Why it stays |
+|---|---|---|
+| `dpi-proxy-transparent`, `dpi-proxy-packet` | systemd unit names | renaming means stop/disable/enable migration on every upgrade |
+| `io.github.kadireren7.dpi-proxy` | launchd label, plist name | same; also a reverse-DNS identity |
+| `com.apple/dpi-proxy`, `dpi_quic4/6`, ... | PF anchor and tables | cleaned up by name by older uninstallers |
+| `dpi_proxy_tp`, `dpi_proxy` | nftables tables | same; `repair`/uninstall delete them by name |
+| `dpi-proxy` | Windows service name, `%ProgramFiles%\dpi-proxy`, `%ProgramData%\dpi-proxy`, firewall rule | same; upgrade keeps config and learned state in place |
+| `/etc/dpi-proxy`, `/var/lib/dpi-proxy`, `/usr/local/etc/dpi-proxy`, `/run/dpi-proxy` | config/state/run paths | users' manual rules and learned decisions live there |
+| `dpi-proxy`, `dpi-proxy.exe` | the engine executable | see below |
+| `DPI_PROXY_*` | environment overrides | used by units and tests |
+| `dpictl`, `dpi-proxy-ctl` | **only** in the installers' upgrade cleanup, the uninstallers, and the upgrade tests | to remove v2.1's command files |
+
+### Engine binary name
+
+The engine stays `dpi-proxy` in v2.2 (installed to `/usr/local/bin`,
+`%ProgramFiles%\dpi-proxy`). Moving it to a libexec directory as
+`nivyx-engine` was evaluated and not done: the service definitions on all
+three platforms, the uninstallers of earlier releases, PF/WinDivert
+process matching (`pgrep -f '^/usr/local/bin/dpi-proxy'`), the firewall
+rule's program path and the update/rollback mechanism all reference that
+path, and a mistake would leave a machine with a dead service. Users
+never need to run it; `nivyx` is the interface. It can move in a later
+release together with a unit migration that has its own upgrade test.
+
+## CLI tests
+
+- `scripts/parity-test.sh` — the same commands are dispatched, documented
+  and completed on all three platforms (list: `scripts/commands.txt`);
+  no legacy command files exist.
+- `scripts/redaction-test.sh` — support-bundle redaction.
+- `scripts/e2e-test-linux.sh`, `scripts/macos/e2e-test.sh`,
+  `scripts/windows/e2e-test.ps1` — full lifecycle on the real platform,
+  including `stats`, `config`, `diagnose`, `repair` (with injected
+  breakage), and `update` against a local mock release server
+  (`NIVYX_RELEASE_API`): wrong checksum, a release that cannot start
+  (rolled back), and a good release.
+- `scripts/upgrade-test-linux.sh`, `scripts/macos/upgrade-test.sh`,
+  `scripts/windows/upgrade-test.ps1` — a real v2.1.0 install (tagged
+  source / the published ZIP, checksum-verified) upgraded in place.

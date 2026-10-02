@@ -958,6 +958,7 @@ ver_gt() {
 }
 
 release_json=""
+work=""
 fetch_release() {
 	have curl || { err "curl is required for update"; exit 1; }
 	[ -n "${NIVYX_RELEASE_API:-}" ] && echo "note: using update source $RELEASE_API" >&2
@@ -968,7 +969,7 @@ fetch_release() {
 }
 
 update_cmd() {
-	local check=0 current latest asset url sums_url arch work want got bak rc=0
+	local check=0 current latest asset url sums_url arch want got bak rc=0
 	for a in "$@"; do
 		case "$a" in
 		--check) check=1 ;;
@@ -1003,7 +1004,7 @@ update_cmd() {
 	fi
 
 	work="$(mktemp -d /var/tmp/nivyx-update.XXXXXX)"
-	trap 'rm -rf "$work"' EXIT
+	trap 'rm -rf "${work:-}"' EXIT
 	echo "Downloading $asset ..."
 	curl -fsSL --max-time 300 -o "$work/$asset" "$url" || { err "download failed"; exit 1; }
 	curl -fsSL --max-time 60 -o "$work/SHA256SUMS" "$sums_url" || { err "could not download SHA256SUMS"; exit 1; }
