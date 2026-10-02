@@ -188,6 +188,47 @@ grep -q 'broken line' /var/lib/dpi-proxy/tp-decisions.conf && die "damaged line 
 c="$(fetch https://example.com/)"; ok "$c" || die "after repair -> '$c'"
 pass "damaged line removed, HTTPS $c"
 
+stepn "failure injection: DoH providers unreachable, then everything unreachable, then recovery"
+# a throw-away table of our own that rejects traffic to the trusted resolvers
+inject() {	# $1 = comma-separated resolver addresses
+	sudo nft delete table inet e2e_inject 2>/dev/null || true
+	sudo nft -f - <<NFT
+table inet e2e_inject {
+	chain output {
+		type filter hook output priority -10; policy accept;
+		ip daddr { $1 } tcp dport { 443, 53 } reject with tcp reset
+		ip daddr { $1 } udp dport 53 reject
+	}
+}
+NFT
+}
+clear_inject() { sudo nft delete table inet e2e_inject 2>/dev/null || true; }
+resolves() { timeout 40 getent ahostsv4 "$1" >/dev/null 2>&1; }
+trap 'clear_inject' EXIT
+exip="$(getent ahostsv4 example.com | awk 'NR == 1 { print $1 }')"
+sudo resolvectl flush-caches 2>/dev/null || true
+inject "1.1.1.1, 1.0.0.1"
+resolves www.kernel.org || die "one DoH provider (Cloudflare) down: DNS did not fail over"
+pass "Cloudflare DoH rejected: DNS still resolves (failover to Google DoH)"
+inject "1.1.1.1, 1.0.0.1, 8.8.8.8, 8.8.4.4"
+sudo resolvectl flush-caches 2>/dev/null || true
+resolves www.gnu.org || die "all DoH providers down: plain fallback did not answer"
+pass "every DoH provider rejected: plain-resolver fallback answers"
+inject "1.1.1.1, 1.0.0.1, 8.8.8.8, 8.8.4.4, 9.9.9.9"
+sudo resolvectl flush-caches 2>/dev/null || true
+resolves www.debian.org && echo "note: resolved even with every trusted resolver rejected (system DNS cache)"
+systemctl is-active --quiet dpi-proxy-transparent || die "the service died while every resolver was unreachable"
+c="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 --resolve "example.com:443:$exip" https://example.com/ 2>&1 || true)"
+ok "$c" || die "HTTPS by address broke while the resolvers were unreachable -> '$c'"
+clear_inject
+sudo resolvectl flush-caches 2>/dev/null || true
+t=0; until resolves www.python.org || [ $t -ge 6 ]; do sleep 5; t=$((t + 1)); done
+resolves www.python.org || die "DNS did not recover after the resolvers came back"
+[ "$(field dns_intercept)" = doh ] || true
+nivyx doctor >/dev/null || die "doctor failed after recovery"
+trap - EXIT
+pass "service survived, DNS recovered when the resolvers returned (no permanent loss)"
+
 stepn "update: check, bad checksum, broken release (rollback), good release"
 mock="$(mktemp -d)"; port=18765
 current="$(nivyx version | awk '{print $2}')"
@@ -248,6 +289,12 @@ cat /tmp/upd.out
 systemctl is-active --quiet dpi-proxy-transparent || die "service down after rollback"
 c="$(fetch https://example.com/)"; ok "$c" || die "after rollback -> '$c'"
 
+echo "--- interrupted download ---"
+mk_release "$mock/engine-good" good 99.0.0
+head -c 2000 "$mock/nivyx-linux-x86_64.tar.gz" > "$mock/trunc.tar.gz" && mv "$mock/trunc.tar.gz" "$mock/nivyx-linux-x86_64.tar.gz"
+upd >/tmp/upd.out 2>&1 && die "update accepted a truncated download"
+cat /tmp/upd.out; grep -q 'SHA-256 mismatch' /tmp/upd.out || die "truncated download gave no checksum diagnostic"
+[ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "truncated download changed the install"
 cfg_before="$(sudo sha256sum "$CONF" | cut -d' ' -f1)"
 mk_release "$mock/engine-good" good 99.0.0
 upd || die "a good update failed"
