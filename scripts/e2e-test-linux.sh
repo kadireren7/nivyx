@@ -8,15 +8,15 @@
 set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-STATUS=/run/dpi-proxy/transparent.status
-CONF=/etc/dpi-proxy/strategy.conf
+STATUS=/run/nivyx/transparent.status
+CONF=/etc/nivyx/strategy.conf
 step=0
 
 stepn() { step=$((step + 1)); printf '\n=== [%d] %s\n' "$step" "$1"; }
 pass() { printf 'PASS: %s\n' "$1"; }
 die() {
 	printf 'FAIL: %s\n' "$1"
-	journalctl -u dpi-proxy-transparent --no-pager -n 60 || true
+	journalctl -u nivyx --no-pager -n 60 || true
 	cat "$STATUS" 2>/dev/null || true
 	exit 1
 }
@@ -27,7 +27,7 @@ ok() { [[ "$1" =~ ^[23][0-9][0-9]$ ]]; }
 
 stepn install
 sudo "$ROOT/scripts/install.sh" || die "install.sh failed"
-systemctl is-active --quiet dpi-proxy-transparent || die "service not active"
+systemctl is-active --quiet nivyx || die "service not active"
 pass "installed; installer health check (DNS + HTTPS through it) passed"
 
 stepn "normal HTTPS works and is intercepted"
@@ -57,7 +57,7 @@ pass "5 requests -> $delta flows"
 
 stepn "bypass path: forced tlsrec rule for example.com"
 printf '\n[domains]\nexample.com = tlsrec\n' | sudo tee -a "$CONF" >/dev/null
-sudo systemctl restart dpi-proxy-transparent
+sudo systemctl restart nivyx
 sleep 3
 c="$(fetch https://example.com/)"; ok "$c" || die "example.com with tlsrec -> '$c'"
 wait_status
@@ -65,19 +65,19 @@ wait_status
 pass "example.com via tlsrec: HTTP $c; bypassed=$(field bypassed)"
 
 stepn "stop = ordinary networking"
-sudo systemctl stop dpi-proxy-transparent
+sudo systemctl stop nivyx
 sudo nft list table inet dpi_proxy_tp >/dev/null 2>&1 && die "table left behind"
 c="$(fetch https://example.com/)"; ok "$c" || die "stopped -> '$c'"
 pass "stopped: table gone, HTTPS $c"
 
 stepn "crash = fail-open, then automatic restart"
-sudo systemctl start dpi-proxy-transparent
+sudo systemctl start nivyx
 sleep 3
-sudo systemctl kill -s KILL dpi-proxy-transparent
+sudo systemctl kill -s KILL nivyx
 sleep 1
 c="$(fetch https://example.com/)"; ok "$c" || die "right after a crash -> '$c'"
-for _ in $(seq 1 20); do systemctl is-active --quiet dpi-proxy-transparent && break; sleep 1; done
-systemctl is-active --quiet dpi-proxy-transparent || die "not restarted"
+for _ in $(seq 1 20); do systemctl is-active --quiet nivyx && break; sleep 1; done
+systemctl is-active --quiet nivyx || die "not restarted"
 sleep 3
 c="$(fetch https://example.com/)"; ok "$c" || die "after restart -> '$c'"
 pass "killed: fail-open, restarted, HTTPS $c"
@@ -153,14 +153,14 @@ grep -q e2e-config-test "$CONF" && die "config unset left the rule"
 printf 'this is not valid\n' | sudo tee -a "$CONF" >/dev/null
 nivyx config check && die "config check missed a broken line"
 sudo cp -p /tmp/nivyx-conf.orig "$CONF"
-sudo systemctl reload dpi-proxy-transparent
+sudo systemctl reload nivyx
 # a corrupt config must never stop the service or the internet
 printf 'garbage line\n[nonsense]\nx = y\n' | sudo tee -a "$CONF" >/dev/null
-sudo systemctl restart dpi-proxy-transparent; sleep 3
-systemctl is-active --quiet dpi-proxy-transparent || die "the service does not start with a corrupt config"
+sudo systemctl restart nivyx; sleep 3
+systemctl is-active --quiet nivyx || die "the service does not start with a corrupt config"
 c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS with a corrupt config -> '$c'"
 sudo cp -p /tmp/nivyx-conf.orig "$CONF"
-sudo systemctl restart dpi-proxy-transparent; sleep 3
+sudo systemctl restart nivyx; sleep 3
 pass "stats/config/diagnose/help behave; manual config preserved; a corrupt config does not stop the service"
 
 stepn "repair: nothing wrong on a healthy install"
@@ -176,27 +176,27 @@ c="$(fetch https://example.com/)"; ok "$c" || die "after repair -> '$c'"
 pass "table restored, HTTPS $c"
 
 stepn "repair: service disabled, stopped, with a stale table and status file"
-sudo systemctl disable --now dpi-proxy-transparent >/dev/null 2>&1
+sudo systemctl disable --now nivyx >/dev/null 2>&1
 sudo nft add table inet dpi_proxy_tp
 sudo mkdir -p "$(dirname "$STATUS")"
 printf 'engine: running\n' | sudo tee "$STATUS" >/dev/null
 out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out"
-systemctl is-enabled --quiet dpi-proxy-transparent || die "repair did not re-enable the service"
-systemctl is-active --quiet dpi-proxy-transparent || die "repair did not start the service"
+systemctl is-enabled --quiet nivyx || die "repair did not re-enable the service"
+systemctl is-active --quiet nivyx || die "repair did not start the service"
 c="$(fetch https://example.com/)"; ok "$c" || die "after repair -> '$c'"
 pass "enabled, started, stale state cleared, HTTPS $c"
 
 stepn "repair: damaged learned-decision file"
-sudo systemctl stop dpi-proxy-transparent
-printf '# header\nbroken line\nexample.org %s 4 tlsrec original 1790000000\n' "0123456789abcdef" | sudo tee /var/lib/dpi-proxy/tp-decisions.conf >/dev/null
+sudo systemctl stop nivyx
+printf '# header\nbroken line\nexample.org %s 4 tlsrec original 1790000000\n' "0123456789abcdef" | sudo tee /var/lib/nivyx/tp-decisions.conf >/dev/null
 # the engine itself must start with the damaged file (fail-safe, not fail-closed)
-sudo systemctl start dpi-proxy-transparent; sleep 3
-systemctl is-active --quiet dpi-proxy-transparent || die "the engine does not start with a damaged decision file"
+sudo systemctl start nivyx; sleep 3
+systemctl is-active --quiet nivyx || die "the engine does not start with a damaged decision file"
 c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS with a damaged decision file -> '$c'"
-sudo systemctl stop dpi-proxy-transparent
+sudo systemctl stop nivyx
 out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out"
 echo "$out" | grep -q 'damaged' || die "repair did not report the damaged line"
-grep -q 'broken line' /var/lib/dpi-proxy/tp-decisions.conf && die "damaged line still present"
+grep -q 'broken line' /var/lib/nivyx/tp-decisions.conf && die "damaged line still present"
 c="$(fetch https://example.com/)"; ok "$c" || die "after repair -> '$c'"
 pass "damaged line removed, HTTPS $c"
 
@@ -229,7 +229,7 @@ pass "every DoH provider rejected: plain-resolver fallback answers"
 inject "1.1.1.1, 1.0.0.1, 8.8.8.8, 8.8.4.4, 9.9.9.9"
 sudo resolvectl flush-caches 2>/dev/null || true
 resolves www.debian.org && echo "note: resolved even with every trusted resolver rejected (system DNS cache)"
-systemctl is-active --quiet dpi-proxy-transparent || die "the service died while every resolver was unreachable"
+systemctl is-active --quiet nivyx || die "the service died while every resolver was unreachable"
 c="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 --resolve "example.com:443:$exip" https://example.com/ 2>&1 || true)"
 ok "$c" || die "HTTPS by address broke while the resolvers were unreachable -> '$c'"
 clear_inject
@@ -292,13 +292,13 @@ mk_release "$mock/engine-good" bad 99.0.0
 upd >/tmp/upd.out 2>&1 && die "update accepted a wrong checksum"
 cat /tmp/upd.out; grep -q 'SHA-256 mismatch' /tmp/upd.out || die "no checksum diagnostic"
 [ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "bad checksum still changed the install"
-systemctl is-active --quiet dpi-proxy-transparent || die "service down after a rejected update"
+systemctl is-active --quiet nivyx || die "service down after a rejected update"
 
 mk_release "$mock/engine-broken" good 99.0.0
 upd >/tmp/upd.out 2>&1 && die "update kept a release whose engine does not run"
 cat /tmp/upd.out
 [ "$(nivyx version | awk '{print $2}')" = "$current" ] || die "broken release was not rolled back"
-systemctl is-active --quiet dpi-proxy-transparent || die "service down after rollback"
+systemctl is-active --quiet nivyx || die "service down after rollback"
 c="$(fetch https://example.com/)"; ok "$c" || die "after rollback -> '$c'"
 
 echo "--- interrupted download ---"
@@ -312,7 +312,7 @@ mk_release "$mock/engine-good" good 99.0.0
 upd || die "a good update failed"
 [ "$(nivyx version | awk '{print $2}')" = 99.0.0 ] || die "version after update: $(nivyx version)"
 [ "$(sudo sha256sum "$CONF" | cut -d' ' -f1)" = "$cfg_before" ] || die "update changed the config"
-systemctl is-active --quiet dpi-proxy-transparent || die "service down after update"
+systemctl is-active --quiet nivyx || die "service down after update"
 c="$(fetch https://example.com/)"; ok "$c" || die "after update -> '$c'"
 out="$(nivyx update --check)"; echo "$out"; echo "$out" | grep -q 'up to date' || die "still offering an update after updating"
 kill "$httpd" 2>/dev/null || true
@@ -320,9 +320,9 @@ unset NIVYX_RELEASE_API
 pass "check ok; bad checksum rejected; broken release rolled back; good release installed ($current -> 99.0.0), config kept"
 
 stepn "size and resource use"
-ls -l /usr/local/bin/dpi-proxy
+ls -l /usr/local/bin/nivyx-engine
 t0="$(date +%s.%N)"
-sudo systemctl restart dpi-proxy-transparent
+sudo systemctl restart nivyx
 i=0
 while [ $i -lt 40 ]; do
 	grep -q '^engine: running' "$STATUS" 2>/dev/null && break
@@ -347,7 +347,7 @@ pass "measured"
 
 stepn "uninstall cleans only our own state"
 sudo "$ROOT/scripts/uninstall.sh" --purge
-systemctl list-unit-files | grep -q dpi-proxy-transparent && die "unit still present"
+systemctl list-unit-files | grep -q 'nivyx.service' && die "unit still present"
 sudo nft list table inet dpi_proxy_tp >/dev/null 2>&1 && die "table still present"
 c="$(fetch https://example.com/)"; ok "$c" || die "after uninstall -> '$c'"
 pass "uninstalled; HTTPS $c"

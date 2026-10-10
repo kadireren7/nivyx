@@ -1,5 +1,5 @@
 [Unit]
-Description=dpi-proxy transparent mode (automatic DPI bypass for outgoing HTTPS and DNS, Linux)
+Description=Nivyx transparent mode (automatic DPI bypass for outgoing HTTPS and DNS, Linux)
 Documentation=https://github.com/kadireren7/nivyx
 # Needs no network at start (resolvers are only asked lazily); the
 # nftables ordering keeps a boot-time `nft -f /etc/nftables.conf`
@@ -9,12 +9,12 @@ Wants=network-pre.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/dpi-proxy --mode transparent
+ExecStart=/usr/local/bin/nivyx-engine --mode transparent
 # SIGHUP re-reads strategy.conf (manual rules).
 ExecReload=/bin/kill -HUP $MAINPID
-Environment=DPI_PROXY_STRATEGY_CONF=/etc/dpi-proxy/strategy.conf
-Environment=DPI_PROXY_TP_DECISIONS=/var/lib/dpi-proxy/tp-decisions.conf
-Environment=DPI_PROXY_TP_STATUS=/run/dpi-proxy/transparent.status
+Environment=DPI_PROXY_STRATEGY_CONF=/etc/nivyx/strategy.conf
+Environment=DPI_PROXY_TP_DECISIONS=/var/lib/nivyx/tp-decisions.conf
+Environment=DPI_PROXY_TP_STATUS=/run/nivyx/transparent.status
 # DNS: every outgoing UDP/TCP 53 query is redirected to a local
 # forwarder on this port and answered over DNS-over-HTTPS (plain DNS
 # only if every DoH server fails). "off" leaves DNS alone.
@@ -22,8 +22,8 @@ Environment=DPI_PROXY_TP_DNS=1053
 # info: startup, learned decisions, failures, network changes only.
 # debug: one line per connection attempt.
 Environment=DPI_PROXY_LOG_LEVEL=info
-StateDirectory=dpi-proxy
-RuntimeDirectory=dpi-proxy
+StateDirectory=nivyx
+RuntimeDirectory=nivyx
 Restart=on-failure
 RestartSec=2
 LimitNOFILE=65536

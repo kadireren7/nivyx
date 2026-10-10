@@ -55,7 +55,7 @@ isn't running or crashes, matched traffic falls back to normal
 
 ## Strategy config
 
-Default path `./strategy.conf` (or `/etc/dpi-proxy/strategy.conf` when
+Default path `./strategy.conf` (or `/etc/nivyx/strategy.conf` when
 installed via `scripts/install.sh`), override with
 `DPI_PROXY_STRATEGY_CONF=/path/to/file`. A missing file just means
 everything defaults to `pass`. Comments (`#` or `;`) and blank lines

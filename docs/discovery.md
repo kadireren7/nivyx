@@ -81,7 +81,7 @@ strategy.
 Results are cached in `discovery-cache.conf` (default path: the
 current working directory, same as `strategy.conf`; override with
 `DPI_PROXY_DISCOVERY_CACHE` or `--discovery-cache PATH`). The systemd
-service uses `/etc/dpi-proxy/discovery-cache.conf`, and
+service uses `/etc/nivyx/discovery-cache.conf`, and
 `nivyx` always passes the service's own paths, so prefer
 `sudo nivyx probe DOMAIN` over calling the binary from an
 arbitrary directory. Entries are keyed by domain **and** a network

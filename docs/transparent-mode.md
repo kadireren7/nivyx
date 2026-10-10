@@ -1,6 +1,6 @@
 # Transparent mode (Linux, Windows, macOS)
 
-`dpi-proxy --mode transparent`, run by the `dpi-proxy-transparent`
+`dpi-proxy --mode transparent`, run by the `nivyx`
 systemd service on Linux, the `dpi-proxy` service on Windows and the
 `io.github.kadireren7.dpi-proxy` launchd daemon on macOS. It is
 the recommended way to use Nivyx: after installing, every
@@ -64,7 +64,7 @@ what get redirected, and its cache keeps working.
 
 For each connection the daemon decides, in this order:
 
-1. a manual rule in `/etc/dpi-proxy/strategy.conf` (`pass`, `tlsrec`,
+1. a manual rule in `/etc/nivyx/strategy.conf` (`pass`, `tlsrec`,
    `tlsrec-split`);
 2. a cached decision for this host on this network;
 3. the automatic ladder:
@@ -104,9 +104,9 @@ sudo nivyx restart
 sudo nivyx stop       # internet keeps working, unbypassed
 ```
 
-On Linux, logs go to the journal (`journalctl -u dpi-proxy-transparent`);
+On Linux, logs go to the journal (`journalctl -u nivyx`);
 `DPI_PROXY_LOG_LEVEL=debug` logs every connection attempt. Learned
-decisions live in `/var/lib/dpi-proxy/tp-decisions.conf`.
+decisions live in `/var/lib/nivyx/tp-decisions.conf`.
 
 ## Windows
 
