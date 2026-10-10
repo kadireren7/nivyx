@@ -10,6 +10,12 @@
 #                                        libnetfilter-queue-dev), not
 #                                        started automatically
 #
+# On Debian/Ubuntu, missing build and runtime dependencies (compiler,
+# make, nftables, OpenSSL + headers, pkg-config, curl) are installed
+# with apt-get automatically. On other systemd + nftables distributions
+# (Arch, Fedora, openSUSE, ...) the installer works as long as the
+# dependencies are present; if something is missing it lists it and stops.
+#
 # Everything installed is owned by dpi-proxy; scripts/uninstall.sh
 # removes exactly that and nothing else.
 
@@ -34,7 +40,7 @@ for arg in "$@"; do
 	case "$arg" in
 	--packet) WITH_PACKET=1 ;;
 	-h | --help)
-		sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
 		;;
 	*)
@@ -57,8 +63,11 @@ fi
 # stopped and our nftables table gone. Files already copied stay (a
 # re-run overwrites them).
 INSTALL_OK=0
+# Set when we stop before changing anything (missing dependencies): an
+# existing, working installation is then left running untouched.
+NOTHING_CHANGED=0
 cleanup_on_failure() {
-	if [ "$INSTALL_OK" -ne 1 ]; then
+	if [ "$INSTALL_OK" -ne 1 ] && [ "$NOTHING_CHANGED" -ne 1 ]; then
 		err "install failed — stopping $TP_SERVICE and removing its nftables table"
 		systemctl stop "$TP_SERVICE" >/dev/null 2>&1 || true
 		nft delete table inet "$TP_TABLE" >/dev/null 2>&1 || true
@@ -78,29 +87,91 @@ run_as_build_user() {
 }
 
 log "[1/7] Checking dependencies..."
-missing=""
-for tool in cc make nft systemctl openssl; do
-	command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
-done
-if [ -n "$missing" ]; then
-	err "missing:$missing"
-	err "on Debian/Ubuntu: sudo apt-get install -y build-essential nftables openssl"
-	exit 2
+
+# Debian family (Debian, Ubuntu, Mint, ...): apt-get is only ever used here.
+is_debian_family() {
+	[ -r /etc/os-release ] || return 1
+	local id id_like
+	id="$(. /etc/os-release && printf '%s' "${ID:-}")"
+	id_like="$(. /etc/os-release && printf '%s' "${ID_LIKE:-}")"
+	case " $id $id_like " in
+	*" debian "* | *" ubuntu "*) command -v apt-get >/dev/null 2>&1 ;;
+	*) return 1 ;;
+	esac
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+have_openssl_headers() {
+	[ -f /usr/include/openssl/ssl.h ] || [ -f "/usr/include/$(uname -m)-linux-gnu/openssl/ssl.h" ] \
+		|| pkg-config --exists openssl 2>/dev/null
+}
+
+# Fills $need_pkgs (apt package names) and $need_desc (what is missing)
+# with only what is actually absent.
+need_pkgs=""
+need_desc=""
+want() { # package description
+	case " $need_pkgs " in *" $1 "*) ;; *) need_pkgs="$need_pkgs $1" ;; esac
+	need_desc="$need_desc $2"
+}
+{ have cc && have make; } || want build-essential "cc/make"
+have nft || want nftables "nft"
+have openssl || want openssl "openssl"
+# curl and pkg-config were never hard requirements (the health check falls
+# back to openssl; headers are also found by path), so they are only
+# installed on Debian-family systems, where it costs nothing.
+if is_debian_family; then
+	have curl || want curl "curl"
+	have pkg-config || want pkg-config "pkg-config"
 fi
-# Transparent mode's DNS-over-HTTPS resolver links OpenSSL.
-if [ ! -f /usr/include/openssl/ssl.h ] && ! pkg-config --exists openssl 2>/dev/null; then
-	if command -v apt-get >/dev/null 2>&1; then
-		log "  installing libssl-dev (OpenSSL headers, build-time only)..."
-		DEBIAN_FRONTEND=noninteractive apt-get install -y libssl-dev >/dev/null \
-			|| { err "could not install libssl-dev: sudo apt-get install -y libssl-dev"; exit 2; }
-	else
-		err "missing OpenSSL development headers (libssl-dev / openssl-devel)"
-		exit 2
-	fi
-fi
+have_openssl_headers || want libssl-dev "openssl-headers"
 if [ "$WITH_PACKET" = 1 ] && ! pkg-config --exists libnetfilter_queue 2>/dev/null; then
-	err "--packet needs libnetfilter-queue-dev: sudo apt-get install -y libnetfilter-queue-dev"
-	exit 2
+	want libnetfilter-queue-dev "libnetfilter-queue"
+fi
+need_pkgs="${need_pkgs# }"
+need_desc="${need_desc# }"
+
+# The service integration is systemd-based; systemd is never installed here.
+if ! have systemctl; then
+	err "systemd (systemctl) is required and was not found. Nivyx supports"
+	err "systemd + nftables based Linux distributions; other init systems"
+	err "(OpenRC, runit, Slackware's rc, ...) are not supported by this installer."
+	{ NOTHING_CHANGED=1; exit 2; }
+fi
+
+if [ -n "$need_pkgs" ]; then
+	if is_debian_family; then
+		log "  missing: $need_desc"
+		log "  installing with apt-get: $need_pkgs"
+		export DEBIAN_FRONTEND=noninteractive
+		aptlog="$(mktemp /var/tmp/nivyx-apt.XXXXXX)"
+		# refresh the package lists only when a package is not installable
+		# from the current lists; the package sources are never modified
+		# shellcheck disable=SC2086
+		if ! apt-get install -y --no-install-recommends $need_pkgs >"$aptlog" 2>&1; then
+			log "  refreshing package lists (apt-get update)..."
+			apt-get update >>"$aptlog" 2>&1 \
+				|| { tail -n 8 "$aptlog" >&2; err "apt-get update failed (network or package sources). Nothing was changed; your internet and any existing Nivyx are unaffected."; err "install manually, then re-run: sudo apt-get install -y $need_pkgs"; { NOTHING_CHANGED=1; exit 2; }; }
+			# shellcheck disable=SC2086
+			apt-get install -y --no-install-recommends $need_pkgs >>"$aptlog" 2>&1 \
+				|| { tail -n 8 "$aptlog" >&2; err "could not install: $need_pkgs. Nothing was changed; your internet and any existing Nivyx are unaffected."; err "install manually, then re-run: sudo apt-get install -y $need_pkgs"; { NOTHING_CHANGED=1; exit 2; }; }
+		fi
+		rm -f "$aptlog"
+		# verify the install really provided what was missing
+		for tool in cc make nft openssl; do
+			have "$tool" || { err "$tool is still missing after installing packages"; { NOTHING_CHANGED=1; exit 2; }; }
+		done
+		have_openssl_headers || { err "OpenSSL headers are still missing after installing libssl-dev"; { NOTHING_CHANGED=1; exit 2; }; }
+	else
+		err "missing: $need_desc"
+		err "packages are installed automatically only on Debian/Ubuntu."
+		err "install the equivalents with your package manager, then re-run:"
+		err "  C compiler + make, nftables, openssl + OpenSSL development headers"
+		err "  (Arch: base-devel nftables openssl; Fedora: gcc make nftables openssl-devel;"
+		err "   openSUSE: gcc make nftables libopenssl-devel)"
+		[ "$WITH_PACKET" = 1 ] && err "  and libnetfilter_queue development files for --packet"
+		{ NOTHING_CHANGED=1; exit 2; }
+	fi
 fi
 log "  OK"
 

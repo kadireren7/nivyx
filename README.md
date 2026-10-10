@@ -42,6 +42,12 @@ cd nivyx
 sudo ./scripts/install.sh
 ```
 
+Works on systemd + nftables based Linux distributions. On
+Debian/Ubuntu the installer automatically installs any missing
+dependencies (compiler, `make`, `nftables`, OpenSSL and its headers,
+`pkg-config`, `curl`) — nothing to install first. It then builds
+Nivyx, sets up the system service and starts it.
+
 [Linux guide](docs/linux.md)
 
 ### Windows
@@ -78,17 +84,17 @@ you cloned, so you can read what it runs.
 
 ## Downloads
 
-Most people need just one file: the Windows ZIP, or the macOS ZIP for their Mac. On Linux, use the install steps above.
+Most people need just one file: the Windows ZIP, or the macOS ZIP for their Mac. **Linux users should use the installer from the repository** (see above), not a download.
 
 | File | For |
 |---|---|
-| `nivyx-linux-x86_64` | Linux x86_64 standalone engine binary |
-| `nivyx-linux-x86_64.tar.gz` | Linux packaged build used by `nivyx update` |
 | `nivyx-windows-x86_64.zip` | Windows 10/11 x64 |
 | `nivyx-macos-arm64.zip` | Apple silicon Macs |
 | `nivyx-macos-x86_64.zip` | Intel Macs |
 | `SHA256SUMS` | SHA-256 integrity verification |
 | `nivyx-2.2.x.spdx.json` | SBOM / dependency inventory |
+
+A Linux archive (`nivyx-linux-x86_64.tar.gz`) is also attached; it exists only for `nivyx update` and is not an installer.
 
 An SBOM is a machine-readable list of software components and dependencies. You only need it, `SHA256SUMS` or the source archives if you want to verify a download or develop Nivyx.
 

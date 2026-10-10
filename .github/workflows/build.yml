@@ -38,6 +38,13 @@ jobs:
           ./scripts/package-linux.sh linux-pkg
           tar -tzf linux-pkg/nivyx-linux-x86_64.tar.gz
 
+  install-deps:
+    # the installer's Debian/Ubuntu dependency auto-install, in clean containers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: ./scripts/install-deps-test.sh
+
   sanitize:
     runs-on: ubuntu-latest
     steps:

@@ -169,7 +169,8 @@ Update available.
 1. queries the official GitHub releases endpoint for the latest stable
    release and compares versions;
 2. picks the asset for this OS and architecture (`nivyx-linux-x86_64.tar.gz`,
-   `nivyx-macos-<arch>.zip`, `nivyx-windows-x86_64.zip`) and `SHA256SUMS`,
+   an update archive rather than an installer; `nivyx-macos-<arch>.zip`,
+   `nivyx-windows-x86_64.zip`) and `SHA256SUMS`,
    and refuses download URLs outside `github.com/kadireren7/nivyx`;
 3. verifies the SHA-256 **before** unpacking anything, then checks that
    the new engine runs here and reports the expected version;

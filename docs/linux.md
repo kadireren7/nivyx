@@ -13,13 +13,34 @@ cd nivyx
 sudo ./scripts/install.sh
 ```
 
-The installer builds from source (installs `libssl-dev` with
-`apt-get` if missing; also needs `build-essential`, `nftables` and
-`openssl`), installs the `dpi-proxy-transparent` systemd service,
-starts it, checks DNS and HTTPS through it, and enables it at boot.
-That's all — nothing to configure afterwards. If another transparent
-DPI tool (e.g. `dpi-bypass`) is active, the installer warns but still
-installs; stop one of them, running two at once breaks both.
+On Debian and Ubuntu (and derivatives) the installer installs whatever
+is missing — compiler and `make` (`build-essential`), `nftables`,
+`openssl`, the OpenSSL headers (`libssl-dev`), `pkg-config`, `curl` —
+with `apt-get` in non-interactive mode. It installs only what is absent,
+runs `apt-get update` only if a package can't be installed from the
+current lists, never edits your package sources and never removes
+packages. Then it builds from source, installs the
+`dpi-proxy-transparent` systemd service, starts it, checks DNS and HTTPS
+through it, and enables it at boot. Nothing to configure afterwards.
+If another transparent DPI tool (e.g. `dpi-bypass`) is active, the
+installer warns but still installs; stop one of them, running two at
+once breaks both.
+
+If package installation fails (no network, broken sources), the
+installer stops before changing anything, prints the `apt-get` command to
+run by hand and exits. Your internet is untouched, and an existing Nivyx
+install keeps running as it was. Re-run the installer after fixing it.
+
+Supported: **systemd + nftables based Linux distributions** (Debian,
+Ubuntu, Arch, Fedora, openSUSE, ...). On those other than Debian/Ubuntu
+the installer works as-is when the dependencies are already installed
+(C compiler and `make`, `nftables`, `openssl` with development headers,
+systemd); if something is missing it lists it and stops without running
+any package manager — install it yourself and re-run. Distributions
+without systemd (OpenRC, runit, Slackware, ...) are not supported by the
+installer, because the service integration depends on systemd.
+
+There is no standalone Linux download: use the installer above.
 
 ## Commands
 
@@ -56,9 +77,14 @@ to the journal: `journalctl -u dpi-proxy-transparent`
 
 ```sh
 git pull && sudo ./scripts/install.sh   # rebuilds and restarts; config kept
+sudo nivyx update                       # verified binary update from the latest release
 sudo ./scripts/uninstall.sh             # removes service, binaries, nftables table
 sudo ./scripts/uninstall.sh --purge     # ...and /etc/dpi-proxy
 ```
+
+Re-running the installer is safe: it keeps `/etc/dpi-proxy/strategy.conf`
+and learned state, and does not reinstall packages that are present.
+Uninstalling does not remove the packages the installer added.
 
 ## Troubleshooting
 
