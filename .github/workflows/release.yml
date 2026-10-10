@@ -101,6 +101,8 @@ jobs:
       - run: git fetch --tags --force
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev nftables
       - run: ./scripts/upgrade-test-linux.sh v2.1.0
+      - run: ./scripts/upgrade-test-linux.sh v2.2.2
+      - run: ./scripts/update-compat-test-linux.sh v2.2.2
 
   macos-upgrade:
     needs: macos

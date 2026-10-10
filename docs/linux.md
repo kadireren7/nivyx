@@ -1,7 +1,7 @@
 # Linux
 
 Linux transparent mode is the original, most mature platform here:
-nftables redirects outgoing HTTPS and DNS to the local `dpi-proxy`
+nftables redirects outgoing HTTPS and DNS to the local engine
 service, which applies DNS-over-HTTPS, TLS record fragmentation and
 per-network learning. Real ISP/DPI field-tested.
 
@@ -20,7 +20,7 @@ with `apt-get` in non-interactive mode. It installs only what is absent,
 runs `apt-get update` only if a package can't be installed from the
 current lists, never edits your package sources and never removes
 packages. Then it builds from source, installs the
-`dpi-proxy-transparent` systemd service, starts it, checks DNS and HTTPS
+`nivyx` systemd service, starts it, checks DNS and HTTPS
 through it, and enables it at boot. Nothing to configure afterwards.
 If another transparent DPI tool (e.g. `dpi-bypass`) is active, the
 installer warns but still installs; stop one of them, running two at
@@ -63,14 +63,14 @@ sudo nivyx stop              # until next start/boot
 See [cli.md](cli.md) for the full
 command reference (shared across platforms).
 
-Optional manual rules go in `/etc/dpi-proxy/strategy.conf` (e.g.
+Optional manual rules go in `/etc/nivyx/strategy.conf` (e.g.
 `example.com = tlsrec`); none are needed.
 
-Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/nivyx`,
-`/etc/dpi-proxy/strategy.conf`, `/var/lib/dpi-proxy/tp-decisions.conf`
+Files: `/usr/local/bin/nivyx-engine`, `/usr/local/bin/nivyx`,
+`/etc/nivyx/strategy.conf`, `/var/lib/nivyx/tp-decisions.conf`
 (learned decisions), status file and nftables table `inet
-dpi_proxy_tp`, systemd unit `dpi-proxy-transparent.service`. Logs go
-to the journal: `journalctl -u dpi-proxy-transparent`
+dpi_proxy_tp`, systemd unit `nivyx.service`. Logs go
+to the journal: `journalctl -u nivyx`
 (`DPI_PROXY_LOG_LEVEL=debug` in the unit for a line per connection).
 
 ## Update / uninstall
@@ -79,10 +79,16 @@ to the journal: `journalctl -u dpi-proxy-transparent`
 git pull && sudo ./scripts/install.sh   # rebuilds and restarts; config kept
 sudo nivyx update                       # verified binary update from the latest release
 sudo ./scripts/uninstall.sh             # removes service, binaries, nftables table
-sudo ./scripts/uninstall.sh --purge     # ...and /etc/dpi-proxy
+sudo ./scripts/uninstall.sh --purge     # ...and /etc/nivyx
 ```
 
-Re-running the installer is safe: it keeps `/etc/dpi-proxy/strategy.conf`
+Installs from before v2.3 (service `dpi-proxy-transparent`, settings in
+`/etc/dpi-proxy`) are moved to the names above automatically — by the
+installer, by `sudo nivyx repair`, or as part of `sudo nivyx update` —
+with your manual rules and learned state kept. If the renamed service does
+not come up healthy, the previous names are started again.
+
+Re-running the installer is safe: it keeps `/etc/nivyx/strategy.conf`
 and learned state, and does not reinstall packages that are present.
 Uninstalling does not remove the packages the installer added.
 
@@ -101,7 +107,7 @@ without disabling anything it finds — stop the other one yourself.
 
 ## Packet mode (optional, advanced)
 
-An older NFQUEUE-based engine (`dpi-proxy-packet`, strategies
+An older NFQUEUE-based engine (`nivyx-packet`, strategies
 `split`/`disorder`/`fake`/`fragment`) is still included for
 experimentation: `sudo ./scripts/install.sh --packet` builds it
 (needs `libnetfilter-queue-dev`) but does not start it. Transparent

@@ -16,24 +16,29 @@
 # (Arch, Fedora, openSUSE, ...) the installer works as long as the
 # dependencies are present; if something is missing it lists it and stops.
 #
-# Everything installed is owned by dpi-proxy; scripts/uninstall.sh
-# removes exactly that and nothing else.
+# Everything installed is owned by Nivyx; scripts/uninstall.sh removes
+# exactly that and nothing else. An install from before v2.3 (service
+# dpi-proxy-transparent, /etc/dpi-proxy, ...) is moved to the current
+# names automatically, keeping its settings and learned state.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 
-TP_SERVICE="dpi-proxy-transparent"
-PACKET_SERVICE="dpi-proxy-packet"
+TP_SERVICE="nivyx"
+PACKET_SERVICE="nivyx-packet"
 TP_TABLE="dpi_proxy_tp"
-BIN_DEST="/usr/local/bin/dpi-proxy"
-PACKET_BIN_DEST="/usr/local/bin/dpi-proxy-packet"
+BIN_DEST="/usr/local/bin/nivyx-engine"
+PACKET_BIN_DEST="/usr/local/bin/nivyx-packet-engine"
 NIVYX_DEST="/usr/local/bin/nivyx"
 UNIT_DIR="/etc/systemd/system"
-CONF_DIR="/etc/dpi-proxy"
+CONF_DIR="/etc/nivyx"
 CONF_DEST="$CONF_DIR/strategy.conf"
-STATUS_FILE="/run/dpi-proxy/transparent.status"
+STATUS_FILE="/run/nivyx/transparent.status"
+# names used by installs made before v2.3 (moved to the ones above)
+OLD_TP_SERVICE="dpi-proxy-transparent"
+OLD_PACKET_SERVICE="dpi-proxy-packet"
 
 WITH_PACKET=0
 for arg in "$@"; do
@@ -205,7 +210,24 @@ remove_legacy_cli() {
 }
 
 log "[3/7] Stopping running Nivyx services for a clean (re)install..."
-systemctl stop "$TP_SERVICE" >/dev/null 2>&1 || true
+systemctl stop "$TP_SERVICE" "$OLD_TP_SERVICE" >/dev/null 2>&1 || true
+# Move an install from before v2.3 to the current names. Settings and
+# learned state are copied (never overwriting what already exists under
+# the new names); the old unit, binaries and folders go afterwards.
+if [ -f "$UNIT_DIR/$OLD_TP_SERVICE.service" ] || [ -d /etc/dpi-proxy ]; then
+	log "  moving the previous install to the nivyx names (settings kept)"
+	for d in /etc /var/lib; do
+		[ -d "$d/dpi-proxy" ] || continue
+		mkdir -p "$d/nivyx"
+		cp -an "$d/dpi-proxy/." "$d/nivyx/"
+		rm -rf "$d/dpi-proxy"
+	done
+	systemctl disable --now "$OLD_TP_SERVICE" "$OLD_PACKET_SERVICE" >/dev/null 2>&1 || true
+	rm -f "$UNIT_DIR/$OLD_TP_SERVICE.service" "$UNIT_DIR/$OLD_PACKET_SERVICE.service" \
+		/usr/local/bin/dpi-proxy /usr/local/bin/dpi-proxy-packet
+	rm -rf /run/dpi-proxy
+	systemctl daemon-reload
+fi
 # Two engines on TCP/443 at once is never intended: transparent mode
 # replaces packet mode as the automatic engine. Packet mode stays
 # installed and can be started by hand (nivyx packet start).

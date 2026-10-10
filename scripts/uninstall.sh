@@ -5,18 +5,21 @@
 # two nftables tables dpi-proxy owns (inet dpi_proxy_tp, inet
 # dpi_proxy). No other firewall state is touched. Needs root.
 #
-# /etc/dpi-proxy (your manual rules) is kept unless --purge is given.
+# /etc/nivyx (your manual rules) is kept unless --purge is given.
 
 set -euo pipefail
 
 PURGE=0
 [ "${1:-}" = "--purge" ] && PURGE=1
 
-SERVICES="dpi-proxy-transparent dpi-proxy-packet"
-BINS="/usr/local/bin/dpi-proxy /usr/local/bin/dpi-proxy-packet /usr/local/bin/nivyx"
+# current names first, then those of installs from before v2.3
+SERVICES="nivyx nivyx-packet dpi-proxy-transparent dpi-proxy-packet"
+BINS="/usr/local/bin/nivyx-engine /usr/local/bin/nivyx-packet-engine /usr/local/bin/nivyx /usr/local/bin/dpi-proxy /usr/local/bin/dpi-proxy-packet"
 UNIT_DIR="/etc/systemd/system"
-CONF_DIR="/etc/dpi-proxy"
-STATE_DIR="/var/lib/dpi-proxy"
+CONF_DIR="/etc/nivyx"
+OLD_CONF_DIR="/etc/dpi-proxy"
+STATE_DIR="/var/lib/nivyx"
+OLD_STATE_DIR="/var/lib/dpi-proxy"
 
 log() { printf '[uninstall] %s\n' "$1"; }
 err() { printf '[uninstall] ERROR: %s\n' "$1" >&2; }
@@ -53,15 +56,17 @@ for t in dpi_proxy_tp dpi_proxy; do
 done
 
 log "[4/4] Removing learned state..."
-rm -rf "$STATE_DIR" /run/dpi-proxy
+rm -rf "$STATE_DIR" "$OLD_STATE_DIR" /run/nivyx /run/dpi-proxy
 
 if [ "$PURGE" = 1 ]; then
-	rm -rf "$CONF_DIR"
+	rm -rf "$CONF_DIR" "$OLD_CONF_DIR"
 	log "removed $CONF_DIR"
 fi
 
 echo
 log "Nivyx removed."
-if [ -d "$CONF_DIR" ]; then
-	echo "Manual rules kept at $CONF_DIR (remove with: sudo $0 --purge)"
-fi
+for kept in "$CONF_DIR" "$OLD_CONF_DIR"; do
+	if [ -d "$kept" ]; then
+		echo "Manual rules kept at $kept (remove with: sudo $0 --purge)"
+	fi
+done

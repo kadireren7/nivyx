@@ -20,7 +20,7 @@ nivyx status --verbose    # full internals (engine, DNS, flows, PF/nft state, ..
 The default output is meant to be read at a glance:
 
 ```
-Nivyx 2.2.0
+Nivyx 2.3.0
 Service: Running
 Protection: Active
 DNS: Healthy

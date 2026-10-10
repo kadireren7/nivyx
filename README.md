@@ -107,7 +107,7 @@ One command, the same on every platform (`start`/`stop`/`restart`/
 
 ```
 $ nivyx status
-Nivyx 2.2.0
+Nivyx 2.3.0
 Service: Running
 Protection: Active
 DNS: Healthy

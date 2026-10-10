@@ -38,6 +38,19 @@ jobs:
           ./scripts/package-linux.sh linux-pkg
           tar -tzf linux-pkg/nivyx-linux-x86_64.tar.gz
 
+  shellcheck:
+    # the installer, uninstaller, CLI and release/install test scripts
+    # (SC1007: the `CDPATH= cd` idiom; SC2034: variables kept for readability)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: >-
+          shellcheck -S warning -e SC1007,SC2034
+          scripts/install.sh scripts/uninstall.sh scripts/nivyx scripts/package-linux.sh
+          scripts/install-deps-test.sh scripts/update-compat-test-linux.sh
+          scripts/upgrade-test-linux.sh scripts/gen-sbom.sh
+
   install-deps:
     # the installer's Debian/Ubuntu dependency auto-install, in clean containers
     runs-on: ubuntu-latest
@@ -220,6 +233,8 @@ jobs:
       - run: git fetch --tags --force
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev nftables
       - run: ./scripts/upgrade-test-linux.sh v2.1.0
+      - run: ./scripts/upgrade-test-linux.sh v2.2.2
+      - run: ./scripts/update-compat-test-linux.sh v2.2.2
 
   macos-upgrade:
     # the real v2.1.0 release ZIP (checksum-verified) upgraded in place by

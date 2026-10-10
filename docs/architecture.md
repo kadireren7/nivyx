@@ -207,7 +207,7 @@ a bad checksum on those specifically would be a real bug.
 
 ## Privilege model (system service)
 
-See [systemd/dpi-proxy-packet.service](../systemd/dpi-proxy-packet.service)
+See [systemd/nivyx-packet.service](../systemd/nivyx-packet.service)
 and [docs/packet-mode.md](packet-mode.md) for how this is wired up as
 a system service: the engine needs exactly `CAP_NET_ADMIN` (nftables
 rule management, NFQUEUE bind) and `CAP_NET_RAW` (the raw injection

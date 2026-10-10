@@ -149,29 +149,39 @@ leaving other hosts unaffected. Enable it only if you've verified it
 actually helps for the sites you care about, on your own network —
 otherwise it will make things worse, not better.
 
-## Legacy internal identifiers (v2.2)
+## Internal identifiers
 
-`nivyx` is the only public command. Some internal identifiers keep their
-pre-rebrand names on purpose, because renaming them would need a
-migration of live services, kernel objects and user data for no user
-benefit:
+`nivyx` is the only public command. **Linux** moved to the nivyx names in
+v2.3: service `nivyx` (and `nivyx-packet`), engine
+`/usr/local/bin/nivyx-engine` (`nivyx-packet-engine`), settings and state
+in `/etc/nivyx`, `/var/lib/nivyx`, `/run/nivyx`. Installs from earlier
+releases are moved automatically (installer, `nivyx repair` or
+`nivyx update`), keeping settings; until then the CLI recognises both
+layouts, which is also what lets an older release's own `nivyx update`
+install a newer package (the release archive keeps the `dpi-proxy`
+file name inside for that reason). Windows and macOS, and a few
+identifiers on every platform, keep their earlier names on purpose,
+because renaming them would need a migration of live services, kernel
+objects and user data for no user benefit:
 
 | Identifier | Where | Why it stays |
 |---|---|---|
-| `dpi-proxy-transparent`, `dpi-proxy-packet` | systemd unit names | renaming means stop/disable/enable migration on every upgrade |
+| `dpi-proxy-transparent`, `dpi-proxy-packet` | Linux unit names before v2.3 | moved to `nivyx` / `nivyx-packet` by the installer, `repair` and `update`; still recognised by the CLI until moved |
 | `io.github.kadireren7.dpi-proxy` | launchd label, plist name | same; also a reverse-DNS identity |
 | `com.apple/dpi-proxy`, `dpi_quic4/6`, ... | PF anchor and tables | cleaned up by name by older uninstallers |
 | `dpi_proxy_tp`, `dpi_proxy` | nftables tables | same; `repair`/uninstall delete them by name |
 | `dpi-proxy` | Windows service name, `%ProgramFiles%\dpi-proxy`, `%ProgramData%\dpi-proxy`, firewall rule | same; upgrade keeps config and learned state in place |
-| `/etc/dpi-proxy`, `/var/lib/dpi-proxy`, `/usr/local/etc/dpi-proxy`, `/run/dpi-proxy` | config/state/run paths | users' manual rules and learned decisions live there |
+| `/usr/local/etc/dpi-proxy`, `/var/run/dpi-proxy` (macOS); `/etc/dpi-proxy`, `/var/lib/dpi-proxy`, `/run/dpi-proxy` (Linux before v2.3) | config/state/run paths | users' manual rules and learned decisions live there; Linux copies them to `/etc/nivyx` etc. |
 | `dpi-proxy`, `dpi-proxy.exe` | the engine executable | see below |
 | `DPI_PROXY_*` | environment overrides | used by units and tests |
 | `dpictl`, `dpi-proxy-ctl` | **only** in the installers' upgrade cleanup, the uninstallers, and the upgrade tests | to remove v2.1's command files |
 
 ### Engine binary name
 
-The engine stays `dpi-proxy` in v2.2 (installed to `/usr/local/bin`,
-`%ProgramFiles%\dpi-proxy`). Moving it to a libexec directory as
+The engine is built as `dpi-proxy` on every platform (installed to
+`/usr/local/bin/nivyx-engine` on Linux since v2.3; still
+`/usr/local/bin/dpi-proxy` on macOS and `%ProgramFiles%\dpi-proxy` on
+Windows). Moving it to a libexec directory as
 `nivyx-engine` was evaluated and not done: the service definitions on all
 three platforms, the uninstallers of earlier releases, PF/WinDivert
 process matching (`pgrep -f '^/usr/local/bin/dpi-proxy'`), the firewall

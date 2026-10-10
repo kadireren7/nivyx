@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 #
 # nivyx — control CLI for the Nivyx transparent-mode service (Linux).
-# This one file is the whole implementation. Internal
-# service/table names (dpi-proxy-transparent, dpi-proxy-packet,
-# dpi_proxy_tp, dpi_proxy, /etc/dpi-proxy, ...) are kept unchanged from
-# pre-rebrand installs — only user-facing output and command names
-# change here.
+# This one file is the whole implementation. Installs made by v2.3 and
+# later use the service nivyx, the engine /usr/local/bin/nivyx-engine
+# and /etc|/var/lib|/run/nivyx. Older installs (dpi-proxy-transparent,
+# /usr/local/bin/dpi-proxy, /etc/dpi-proxy, ...) keep working until they
+# are migrated (`sudo nivyx migrate`, also done by the installer and by
+# `nivyx update`): both layouts are detected here. The nftables table
+# names (dpi_proxy_tp, dpi_proxy) and the DPI_PROXY_* variables are
+# internal identifiers and are the same in both.
 #
 # Zero runtime dependencies beyond what the services already need:
 # plain bash around systemctl/journalctl/nft and the installed
 # binaries. systemd stays the source of truth for service state.
 #
-# Transparent mode (dpi-proxy-transparent.service) is the default
+# Transparent mode (nivyx.service) is the default
 # engine on Linux: start/stop/restart/reload/status/logs act on it.
-# Packet mode (dpi-proxy-packet.service) keeps its own commands:
+# Packet mode (nivyx-packet.service) keeps its own commands:
 # probe/reprobe/networks and `packet <start|stop|restart|status|logs>`.
 #
 # Normal use needs none of the diagnostic commands — the transparent
@@ -21,8 +24,24 @@
 
 set -euo pipefail
 
-TP_SERVICE="dpi-proxy-transparent"
-PACKET_SERVICE="dpi-proxy-packet"
+# Layout: new (v2.3+) unless the unit file of the old layout is the one
+# present. Pure file tests: no process launched.
+UNIT_DIR="/etc/systemd/system"
+if [ ! -e "$UNIT_DIR/nivyx.service" ] && [ -e "$UNIT_DIR/dpi-proxy-transparent.service" ]; then
+	LAYOUT=old
+	TP_SERVICE="dpi-proxy-transparent"
+	PACKET_SERVICE="dpi-proxy-packet"
+	ENGINE_BIN="/usr/local/bin/dpi-proxy"
+	PACKET_BIN="/usr/local/bin/dpi-proxy-packet"
+	NAME_DIR="dpi-proxy"
+else
+	LAYOUT=new
+	TP_SERVICE="nivyx"
+	PACKET_SERVICE="nivyx-packet"
+	ENGINE_BIN="/usr/local/bin/nivyx-engine"
+	PACKET_BIN="/usr/local/bin/nivyx-packet-engine"
+	NAME_DIR="nivyx"
+fi
 TP_TABLE="dpi_proxy_tp"
 PACKET_TABLE="dpi_proxy"
 
@@ -55,11 +74,11 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # whose changes to a cache would be lost.)
 TP_ENV_RAW=""
 if have systemctl; then
-	TP_ENV_RAW="$(systemctl show -p Environment --value dpi-proxy-transparent 2>/dev/null | tr ' ' '\n')" || TP_ENV_RAW=""
+	TP_ENV_RAW="$(systemctl show -p Environment --value "$TP_SERVICE" 2>/dev/null | tr ' ' '\n')" || TP_ENV_RAW=""
 fi
 service_env() {
 	local unit="$1" key="$2" fallback="$3" val="" raw=""
-	if [ "$unit" = dpi-proxy-transparent ]; then
+	if [ "$unit" = "$TP_SERVICE" ]; then
 		raw="$TP_ENV_RAW"
 	elif have systemctl; then
 		raw="$(systemctl show -p Environment --value "$unit" 2>/dev/null | tr ' ' '\n')"
@@ -68,18 +87,18 @@ service_env() {
 	printf '%s' "${val:-$fallback}"
 }
 
-TP_STATUS_FILE="${DPI_PROXY_TP_STATUS:-$(service_env "$TP_SERVICE" DPI_PROXY_TP_STATUS /run/dpi-proxy/transparent.status)}"
-TP_DECISIONS="${DPI_PROXY_TP_DECISIONS:-$(service_env "$TP_SERVICE" DPI_PROXY_TP_DECISIONS /var/lib/dpi-proxy/tp-decisions.conf)}"
-STRATEGY_CONF="${DPI_PROXY_STRATEGY_CONF:-$(service_env "$TP_SERVICE" DPI_PROXY_STRATEGY_CONF /etc/dpi-proxy/strategy.conf)}"
+TP_STATUS_FILE="${DPI_PROXY_TP_STATUS:-$(service_env "$TP_SERVICE" DPI_PROXY_TP_STATUS /run/$NAME_DIR/transparent.status)}"
+TP_DECISIONS="${DPI_PROXY_TP_DECISIONS:-$(service_env "$TP_SERVICE" DPI_PROXY_TP_DECISIONS /var/lib/$NAME_DIR/tp-decisions.conf)}"
+STRATEGY_CONF="${DPI_PROXY_STRATEGY_CONF:-$(service_env "$TP_SERVICE" DPI_PROXY_STRATEGY_CONF /etc/$NAME_DIR/strategy.conf)}"
 
-# The system-service binary (/usr/local/bin/dpi-proxy, installed by
+# The system-service binary ($ENGINE_BIN, installed by
 # scripts/install.sh) takes priority over whatever "dpi-proxy" a user's
 # PATH happens to resolve first (e.g. a plain SOCKS5-only dev build in
 # ~/.local/bin) — nivyx reports on the installed service, not on an
 # arbitrary same-named binary earlier in PATH.
 find_binary() {
-	if [ -x /usr/local/bin/dpi-proxy ]; then
-		echo /usr/local/bin/dpi-proxy
+	if [ -x "$ENGINE_BIN" ]; then
+		echo "$ENGINE_BIN"
 	elif have dpi-proxy; then
 		command -v dpi-proxy
 	else
@@ -88,8 +107,8 @@ find_binary() {
 }
 
 find_packet_binary() {
-	if [ -x /usr/local/bin/dpi-proxy-packet ]; then
-		echo /usr/local/bin/dpi-proxy-packet
+	if [ -x "$PACKET_BIN" ]; then
+		echo "$PACKET_BIN"
 	elif have dpi-proxy-packet; then
 		command -v dpi-proxy-packet
 	else
@@ -384,8 +403,8 @@ run_probe() {
 		echo "Stopping $PACKET_SERVICE for the probe (restarted afterwards)..."
 		systemctl stop "$PACKET_SERVICE"
 	fi
-	DPI_PROXY_STRATEGY_CONF="${DPI_PROXY_STRATEGY_CONF:-$(service_env "$PACKET_SERVICE" DPI_PROXY_STRATEGY_CONF /etc/dpi-proxy/strategy.conf)}" \
-	DPI_PROXY_DISCOVERY_CACHE="${DPI_PROXY_DISCOVERY_CACHE:-$(service_env "$PACKET_SERVICE" DPI_PROXY_DISCOVERY_CACHE /etc/dpi-proxy/discovery-cache.conf)}" \
+	DPI_PROXY_STRATEGY_CONF="${DPI_PROXY_STRATEGY_CONF:-$(service_env "$PACKET_SERVICE" DPI_PROXY_STRATEGY_CONF /etc/$NAME_DIR/strategy.conf)}" \
+	DPI_PROXY_DISCOVERY_CACHE="${DPI_PROXY_DISCOVERY_CACHE:-$(service_env "$PACKET_SERVICE" DPI_PROXY_DISCOVERY_CACHE /etc/$NAME_DIR/discovery-cache.conf)}" \
 		"$bin" "$@" || rc=$?
 	if [ "$was_active" = 1 ]; then
 		systemctl start "$PACKET_SERVICE" \
@@ -818,8 +837,8 @@ config_cmd() {
 # ---- repair ------------------------------------------------------------
 #
 # Explicit and mutating, unlike doctor. Touches only Nivyx-owned state
-# (our unit, our nftables table, our files under /etc/dpi-proxy,
-# /var/lib/dpi-proxy, /run/dpi-proxy). Never edits your manual rules,
+# (our unit, our nftables table, our files under /etc/nivyx,
+# /var/lib/nivyx, /run/nivyx). Never edits your manual rules,
 # never touches other firewall tables, never disables other software.
 
 REPAIRED=0
@@ -835,6 +854,13 @@ repair() {
 		exit 1
 	fi
 	need_systemctl
+	# an install from before v2.3 moves to the nivyx names first, then
+	# the checks below run again against the new layout
+	if [ "$LAYOUT" = old ] && [ "${NIVYX_REPAIR_MIGRATED:-0}" != 1 ]; then
+		if migrate_layout; then
+			NIVYX_REPAIR_MIGRATED=1 exec "$0" repair
+		fi
+	fi
 	echo "$SELF repair: checking Nivyx-owned state"
 	echo
 
@@ -849,7 +875,7 @@ repair() {
 	if bin="$(find_binary)"; then
 		if [ ! -x "$bin" ]; then chmod 0755 "$bin" && fixed "made $bin executable"; else okay "engine binary $bin"; fi
 	else
-		cannot "engine binary /usr/local/bin/dpi-proxy is missing; re-run scripts/install.sh"
+		cannot "engine binary $ENGINE_BIN is missing; re-run scripts/install.sh"
 	fi
 
 	for dir in "$(dirname "$STRATEGY_CONF")" "$(dirname "$TP_DECISIONS")"; do
@@ -1026,14 +1052,14 @@ update_cmd() {
 		|| { err "the downloaded engine is not version $latest; nothing was installed"; exit 1; }
 
 	# stage next to the targets (same filesystem) so the swap is a rename
-	bak="/var/lib/dpi-proxy/rollback"
+	bak="/var/lib/$NAME_DIR/rollback"
 	mkdir -p "$bak"
-	cp -p /usr/local/bin/dpi-proxy "$bak/dpi-proxy"
+	cp -p "$ENGINE_BIN" "$bak/dpi-proxy"
 	cp -p /usr/local/bin/nivyx "$bak/nivyx"
-	install -m 0755 "$pkg/dpi-proxy" /usr/local/bin/.dpi-proxy.new
+	install -m 0755 "$pkg/dpi-proxy" /usr/local/bin/.engine.new
 	install -m 0755 "$pkg/nivyx" /usr/local/bin/.nivyx.new
-	command -v strip >/dev/null 2>&1 && strip /usr/local/bin/.dpi-proxy.new 2>/dev/null || true
-	mv -f /usr/local/bin/.dpi-proxy.new /usr/local/bin/dpi-proxy
+	command -v strip >/dev/null 2>&1 && strip /usr/local/bin/.engine.new 2>/dev/null || true
+	mv -f /usr/local/bin/.engine.new "$ENGINE_BIN"
 	mv -f /usr/local/bin/.nivyx.new /usr/local/bin/nivyx
 	# man page and completions (best effort; same places the installer uses)
 	if [ -f "$pkg/nivyx.1" ]; then
@@ -1051,10 +1077,15 @@ update_cmd() {
 		echo "Health check passed."
 		echo "Nivyx updated to $latest. Configuration and learned state were kept."
 		rm -rf "$bak"
+		# installs from before v2.3 move to the nivyx names; if that does
+		# not work out they stay exactly as they were (and keep running)
+		if [ "$LAYOUT" = old ]; then
+			migrate_layout || echo "note: the move to the new service names was not applied; Nivyx keeps running as before ($SELF repair retries it)"
+		fi
 		return 0
 	fi
 	err "the new version failed its health check; restoring ${current:-the previous version}"
-	mv -f "$bak/dpi-proxy" /usr/local/bin/dpi-proxy
+	mv -f "$bak/dpi-proxy" "$ENGINE_BIN"
 	mv -f "$bak/nivyx" /usr/local/bin/nivyx
 	systemctl reset-failed "$TP_SERVICE" 2>/dev/null || true
 	systemctl restart "$TP_SERVICE" || true
@@ -1065,6 +1096,95 @@ update_cmd() {
 	fi
 	rm -rf "$bak"
 	exit 1
+}
+
+
+# ---- migrate (installs from before v2.3) --------------------------------
+#
+# Old layout: service dpi-proxy-transparent, engine /usr/local/bin/dpi-proxy,
+# /etc|/var/lib|/run/dpi-proxy. New: service nivyx, engine nivyx-engine,
+# /etc|/var/lib|/run/nivyx. The new files are staged next to the old ones
+# and the old ones are removed only after the new service passed its
+# health check; if it does not, the old service is started again.
+# The nftables table, DPI_PROXY_* variables and all settings are kept.
+migrate_layout() {
+	[ "$LAYOUT" = old ] || return 0
+	[ "$(id -u)" -eq 0 ] || return 1
+	local old_tp="$TP_SERVICE" old_pk="$PACKET_SERVICE" was_active="" was_enabled="" pk_present=0 pk_active="" d
+	[ -f "$UNIT_DIR/$old_tp.service" ] || return 0
+	[ -x "$ENGINE_BIN" ] || return 1
+	was_active="$(systemctl is-active "$old_tp" 2>/dev/null || true)"
+	was_enabled="$(systemctl is-enabled "$old_tp" 2>/dev/null || true)"
+	[ -f "$UNIT_DIR/$old_pk.service" ] && pk_present=1
+	pk_active="$(systemctl is-active "$old_pk" 2>/dev/null || true)"
+	echo "Moving this install to the nivyx service names ..."
+
+	# 1. stage (nothing old is touched yet; any failure removes what was staged)
+	mig_unstage() {
+		rm -f "$UNIT_DIR/nivyx.service" "$UNIT_DIR/nivyx-packet.service" \
+			/usr/local/bin/nivyx-engine /usr/local/bin/nivyx-packet-engine
+		systemctl daemon-reload
+	}
+	cp -p "$ENGINE_BIN" /usr/local/bin/nivyx-engine || { mig_unstage; return 1; }
+	if [ -x /usr/local/bin/dpi-proxy-packet ]; then
+		cp -p /usr/local/bin/dpi-proxy-packet /usr/local/bin/nivyx-packet-engine || { mig_unstage; return 1; }
+	fi
+	for d in /etc /var/lib; do
+		[ -d "$d/dpi-proxy" ] || continue
+		if [ -d "$d/nivyx" ]; then
+			cp -an "$d/dpi-proxy/." "$d/nivyx/" || { mig_unstage; return 1; }
+		else
+			cp -a "$d/dpi-proxy" "$d/nivyx" || { mig_unstage; return 1; }
+		fi
+	done
+	mig_unit() { # old-unit-file new-unit-file
+		sed -e 's#/usr/local/bin/dpi-proxy-packet#/usr/local/bin/nivyx-packet-engine#g' \
+			-e 's#/usr/local/bin/dpi-proxy#/usr/local/bin/nivyx-engine#g' \
+			-e 's#/etc/dpi-proxy#/etc/nivyx#g' -e 's#/var/lib/dpi-proxy#/var/lib/nivyx#g' \
+			-e 's#/run/dpi-proxy#/run/nivyx#g' \
+			-e 's#^StateDirectory=dpi-proxy#StateDirectory=nivyx#' \
+			-e 's#^RuntimeDirectory=dpi-proxy#RuntimeDirectory=nivyx#' \
+			-e 's#^Description=dpi-proxy #Description=Nivyx #' "$1" > "$2.tmp" && mv -f "$2.tmp" "$2"
+	}
+	mig_unit "$UNIT_DIR/$old_tp.service" "$UNIT_DIR/nivyx.service" || { mig_unstage; return 1; }
+	if [ "$pk_present" = 1 ]; then
+		mig_unit "$UNIT_DIR/$old_pk.service" "$UNIT_DIR/nivyx-packet.service" || { mig_unstage; return 1; }
+	fi
+	systemctl daemon-reload
+
+	# 2. switch: the old service stops first (its stop removes the shared
+	# nftables table), then the new one starts
+	systemctl stop "$old_tp" >/dev/null 2>&1 || true
+	[ "$pk_active" = active ] && systemctl stop "$old_pk" >/dev/null 2>&1
+	if [ "$was_active" = active ]; then
+		systemctl start nivyx >/dev/null 2>&1 || true
+		TP_SERVICE=nivyx; TP_STATUS_FILE=/run/nivyx/transparent.status
+		if ! update_healthy; then
+			err "the renamed service did not pass its health check; going back to the previous names"
+			systemctl stop nivyx >/dev/null 2>&1 || true
+			rm -f "$UNIT_DIR/nivyx.service" "$UNIT_DIR/nivyx-packet.service" /usr/local/bin/nivyx-engine /usr/local/bin/nivyx-packet-engine
+			systemctl daemon-reload
+			systemctl reset-failed "$old_tp" 2>/dev/null || true
+			systemctl start "$old_tp" >/dev/null 2>&1 || true
+			[ "$pk_active" = active ] && systemctl start "$old_pk" >/dev/null 2>&1
+			TP_SERVICE="$old_tp"
+			return 1
+		fi
+	fi
+
+	# 3. committed: carry the enabled state over, remove the old names
+	[ "$was_enabled" = enabled ] && systemctl enable nivyx >/dev/null 2>&1
+	if [ "$pk_present" = 1 ] && systemctl is-enabled --quiet "$old_pk" 2>/dev/null; then
+		systemctl enable nivyx-packet >/dev/null 2>&1
+	fi
+	[ "$pk_active" = active ] && systemctl start nivyx-packet >/dev/null 2>&1
+	systemctl disable "$old_tp" "$old_pk" >/dev/null 2>&1 || true
+	rm -f "$UNIT_DIR/$old_tp.service" "$UNIT_DIR/$old_pk.service" \
+		/usr/local/bin/dpi-proxy /usr/local/bin/dpi-proxy-packet
+	rm -rf /etc/dpi-proxy /var/lib/dpi-proxy /run/dpi-proxy
+	systemctl daemon-reload
+	echo "Done: service nivyx, engine /usr/local/bin/nivyx-engine, settings in /etc/nivyx."
+	return 0
 }
 
 # Engine reports running within 30s and HTTPS works through it.
