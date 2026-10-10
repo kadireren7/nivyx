@@ -34,6 +34,7 @@ trap 'kill $httpd 2>/dev/null || true; git -C "$ROOT" worktree remove --force "$
 # the package the current tree would publish, served as "the latest release"
 make -C "$ROOT" clean >/dev/null && make -C "$ROOT" >/dev/null || die "build failed"
 new_version="$(cat "$ROOT/VERSION")"
+tree_version="$new_version"
 "$ROOT/scripts/package-linux.sh" "$mock/out" >/dev/null
 (cd "$mock/out" && sha256sum nivyx-linux-x86_64.tar.gz > SHA256SUMS)
 cat > "$mock/out/latest.json" <<JSON
@@ -99,10 +100,33 @@ sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update || die "the new CLI
 assert_migrated
 pass "update installed 99.0.0 and moved the install to the nivyx names"
 
+stepn "rollback: the renamed service cannot start -> the old layout is restored"
+sudo "$ROOT/scripts/uninstall.sh" --purge
+new_version=99.0.0	# the mock release now serves the 99.0.0 package
+install_old
+old_cli_update
+# a drop-in makes the NEW unit fail to start (systemd applies it once the unit exists)
+sudo mkdir -p /etc/systemd/system/nivyx.service.d
+printf '[Service]\nExecStart=\nExecStart=/bin/false\n' | sudo tee /etc/systemd/system/nivyx.service.d/fail.conf >/dev/null
+sudo systemctl daemon-reload
+out="$(sudo nivyx repair 2>&1)" && echo "$out" || echo "$out"
+sudo rm -rf /etc/systemd/system/nivyx.service.d
+sudo systemctl daemon-reload
+active dpi-proxy-transparent || die "rollback: the old service is not running"
+active nivyx && die "rollback: both old and new services are active"
+[ -e /etc/systemd/system/nivyx.service ] && die "rollback: the new unit was left behind"
+[ -e /usr/local/bin/nivyx-engine ] && die "rollback: the staged new engine was left behind"
+[ -x /usr/local/bin/dpi-proxy ] || die "rollback: the old engine is gone"
+[ "$(sudo sha256sum "$OLD_CONF" | cut -d' ' -f1)" = "$conf_hash" ] || die "rollback: the manual config changed"
+c="$(fetch https://example.com/)"; ok "$c" || die "rollback: HTTPS -> '$c'"
+out="$(nivyx status)"; echo "$out" | grep -q '^Service: Running' || die "rollback: nivyx status not Running"
+pass "unhealthy new service: old layout restored, one service active, config intact, HTTPS fine"
+sudo "$ROOT/scripts/uninstall.sh" --purge
+
 stepn "uninstall"
 sudo "$ROOT/scripts/uninstall.sh" --purge
 systemctl list-unit-files | grep -qE '^(nivyx|dpi-proxy-transparent)\.service' && die "unit still present"
 for f in /usr/local/bin/nivyx /usr/local/bin/nivyx-engine /usr/local/bin/dpi-proxy /etc/nivyx /etc/dpi-proxy /var/lib/nivyx /var/lib/dpi-proxy; do
 	[ -e "$f" ] && die "$f left behind"
 done
-printf '\nUPDATE COMPAT %s -> %s: ALL CHECKS PASSED\n' "$OLD_TAG" "$new_version"
+printf '\nUPDATE COMPAT %s -> %s: ALL CHECKS PASSED\n' "$OLD_TAG" "$tree_version"

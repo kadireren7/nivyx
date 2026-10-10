@@ -1119,14 +1119,23 @@ migrate_layout() {
 	pk_active="$(systemctl is-active "$old_pk" 2>/dev/null || true)"
 	echo "Moving this install to the nivyx service names ..."
 
-	# 1. stage (nothing old is touched yet)
-	cp -p "$ENGINE_BIN" /usr/local/bin/nivyx-engine || return 1
+	# 1. stage (nothing old is touched yet; any failure removes what was staged)
+	mig_unstage() {
+		rm -f "$UNIT_DIR/nivyx.service" "$UNIT_DIR/nivyx-packet.service" \
+			/usr/local/bin/nivyx-engine /usr/local/bin/nivyx-packet-engine
+		systemctl daemon-reload
+	}
+	cp -p "$ENGINE_BIN" /usr/local/bin/nivyx-engine || { mig_unstage; return 1; }
 	if [ -x /usr/local/bin/dpi-proxy-packet ]; then
-		cp -p /usr/local/bin/dpi-proxy-packet /usr/local/bin/nivyx-packet-engine || return 1
+		cp -p /usr/local/bin/dpi-proxy-packet /usr/local/bin/nivyx-packet-engine || { mig_unstage; return 1; }
 	fi
 	for d in /etc /var/lib; do
 		[ -d "$d/dpi-proxy" ] || continue
-		if [ -d "$d/nivyx" ]; then cp -an "$d/dpi-proxy/." "$d/nivyx/"; else cp -a "$d/dpi-proxy" "$d/nivyx"; fi
+		if [ -d "$d/nivyx" ]; then
+			cp -an "$d/dpi-proxy/." "$d/nivyx/" || { mig_unstage; return 1; }
+		else
+			cp -a "$d/dpi-proxy" "$d/nivyx" || { mig_unstage; return 1; }
+		fi
 	done
 	mig_unit() { # old-unit-file new-unit-file
 		sed -e 's#/usr/local/bin/dpi-proxy-packet#/usr/local/bin/nivyx-packet-engine#g' \
@@ -1137,8 +1146,10 @@ migrate_layout() {
 			-e 's#^RuntimeDirectory=dpi-proxy#RuntimeDirectory=nivyx#' \
 			-e 's#^Description=dpi-proxy #Description=Nivyx #' "$1" > "$2.tmp" && mv -f "$2.tmp" "$2"
 	}
-	mig_unit "$UNIT_DIR/$old_tp.service" "$UNIT_DIR/nivyx.service" || return 1
-	[ "$pk_present" = 1 ] && mig_unit "$UNIT_DIR/$old_pk.service" "$UNIT_DIR/nivyx-packet.service"
+	mig_unit "$UNIT_DIR/$old_tp.service" "$UNIT_DIR/nivyx.service" || { mig_unstage; return 1; }
+	if [ "$pk_present" = 1 ]; then
+		mig_unit "$UNIT_DIR/$old_pk.service" "$UNIT_DIR/nivyx-packet.service" || { mig_unstage; return 1; }
+	fi
 	systemctl daemon-reload
 
 	# 2. switch: the old service stops first (its stop removes the shared
