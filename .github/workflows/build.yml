@@ -38,6 +38,14 @@ jobs:
           ./scripts/package-linux.sh linux-pkg
           tar -tzf linux-pkg/nivyx-linux-x86_64.tar.gz
 
+  shellcheck:
+    # SC1007: the `CDPATH= cd` idiom; SC2034: variables kept for readability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: shellcheck -S warning -e SC1007,SC2034 scripts/*.sh scripts/nivyx scripts/macos/*.sh scripts/macos/nivyx scripts/windows/*.sh
+
   install-deps:
     # the installer's Debian/Ubuntu dependency auto-install, in clean containers
     runs-on: ubuntu-latest
