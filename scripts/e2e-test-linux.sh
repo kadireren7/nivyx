@@ -122,7 +122,18 @@ sudo systemctl start nivyx
 sleep 3
 sudo systemctl kill -s KILL nivyx
 sleep 1
-c="$(fetch https://example.com/)"; ok "$c" || die "right after a crash -> '$c'"
+c="$(fetch https://example.com/)"
+if ! ok "$c"; then
+	# what is still in place one second after the crash (fail-open diagnosis)
+	echo "--- 1 s after SIGKILL ---"
+	systemctl show nivyx -p ActiveState,SubState,Result,ExecMainStatus,NRestarts --no-pager || true
+	sudo nft list table inet dpi_proxy_tp 2>&1 | head -40 || true
+	sudo nft list ruleset 2>/dev/null | grep -n 'table\|redirect' | head -20 || true
+	getent ahostsv4 example.com | head -3 || true
+	sudo conntrack -L -p tcp --dport 443 2>/dev/null | head -5 || true
+	curl -v -sS -o /dev/null --max-time 10 https://example.com/ 2>&1 | grep -E 'Trying|Connected|connect' | head -5 || true
+	die "right after a crash -> '$c'"
+fi
 for _ in $(seq 1 20); do systemctl is-active --quiet nivyx && break; sleep 1; done
 systemctl is-active --quiet nivyx || die "not restarted"
 sleep 3
