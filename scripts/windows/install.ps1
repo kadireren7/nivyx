@@ -165,16 +165,29 @@ try {
         if ((Get-Service $Service).Status -eq 'Running' -and (Test-Path $StatusFile) -and
             (Select-String -Path $StatusFile -Pattern '^engine: running' -Quiet)) { $ok = $true; break }
     }
-    if (-not $ok) { throw "service is not healthy; see $DataDir\dpi-proxy.log" }
+    if (-not $ok) { throw "the engine did not report running within 20 s (service: $((Get-Service $Service).Status))" }
+    $enginePid = (Get-CimInstance Win32_Service -Filter "Name='$Service'").ProcessId
     Clear-DnsClientCache -ErrorAction SilentlyContinue
     try { Resolve-DnsName example.com -Type A -ErrorAction Stop | Out-Null }
     catch { throw "name resolution through the service failed: $_" }
     try { Invoke-WebRequest -Uri 'https://example.com/' -UseBasicParsing -TimeoutSec 20 | Out-Null }
     catch { throw "HTTPS check through the service failed: $_" }
+    # Fail-open means these checks would also pass with the engine gone
+    # (traffic then goes out directly): they only prove the engine if the
+    # same engine process is still running afterwards.
+    $after = Get-CimInstance Win32_Service -Filter "Name='$Service'"
+    if ($after.State -ne 'Running' -or $after.ProcessId -ne $enginePid) {
+        throw 'the engine stopped during the DNS/HTTPS check'
+    }
     $installed = $true
 }
 catch {
     Fail "$_"
+    $log = Join-Path $DataDir 'dpi-proxy.log'
+    if (Test-Path $log) {
+        Write-Host "[install] last lines of ${log}:"
+        Get-Content $log -Tail 15 | ForEach-Object { Write-Host "    $_" }
+    }
     Fail 'stopping and removing the service (fail-open: networking returns to normal)'
     Stop-Service $Service -Force -ErrorAction SilentlyContinue
     & sc.exe delete $Service 2>$null | Out-Null
