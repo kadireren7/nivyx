@@ -102,6 +102,24 @@ if ($LASTEXITCODE -ne 0) { Die "install.ps1 exited $LASTEXITCODE" }
 if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service not running' }
 Pass 'installed; service running; installer health check (DNS + HTTPS through it) passed'
 
+Step 'a reinstall that fails puts the previous version back'
+$sysHash = (Get-FileHash (Join-Path $InstDir 'WinDivert64.sys')).Hash
+$exeHash = (Get-FileHash (Join-Path $InstDir 'dpi-proxy.exe')).Hash
+$bad = Join-Path $env:TEMP "nivyx-e2e-bad2-$PID"
+Copy-Item $Package $bad -Recurse
+Set-Content -Encoding ASCII (Join-Path $bad 'WinDivert64.sys') 'not a driver'
+$rc = Invoke-Launcher (Join-Path $bad 'Install Nivyx.cmd')
+Remove-Item $bad -Recurse -Force
+if ($rc -ne 4) { Die "a reinstall with a corrupt driver exited $rc (expected 4)" }
+if ((Get-Service dpi-proxy -ErrorAction SilentlyContinue).Status -ne 'Running') { Die 'the previous version is not running again' }
+if ((Get-FileHash (Join-Path $InstDir 'WinDivert64.sys')).Hash -ne $sysHash) { Die 'the previous driver file was not restored' }
+if ((Get-FileHash (Join-Path $InstDir 'dpi-proxy.exe')).Hash -ne $exeHash) { Die 'the previous engine was not restored' }
+if (Get-ChildItem $env:ProgramData -Directory -Filter 'nivyx-install-backup-*' -ErrorAction SilentlyContinue) { Die 'a successful restore left its backup behind' }
+foreach ($i in 1..40) { if (Select-String -Path $StatusFile -Pattern '^engine: running' -Quiet -ErrorAction SilentlyContinue) { break }; Start-Sleep -Milliseconds 500 }
+$c = Fetch 'https://example.com/'
+if ($c -notmatch '^[23]\d\d$') { Die "after the restore -> '$c'" }
+Pass "exit 4; previous engine and driver restored and running; HTTPS $c"
+
 Step 'normal HTTPS works and is intercepted'
 foreach ($u in 'https://example.com/', 'https://www.wikipedia.org/', 'https://github.com/') {
     $c = Fetch $u
