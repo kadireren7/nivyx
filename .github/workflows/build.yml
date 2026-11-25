@@ -33,10 +33,54 @@ jobs:
         run: ./scripts/parity-test.sh
       - name: support-bundle redaction
         run: ./scripts/redaction-test.sh
-      - name: Linux update package
+
+  linux-package:
+    # The update package is built on the oldest supported baseline
+    # (Ubuntu 22.04: glibc 2.35, OpenSSL 3.0), so the engine in it also
+    # runs on Debian 12, Ubuntu 22.04 and every newer distribution;
+    # v2.3.0's package, built on the runner's Ubuntu 24.04, needed glibc 2.38
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: apt-get update && apt-get install -y --no-install-recommends build-essential libssl-dev pkg-config ca-certificates
+      - run: make re
+      - run: ./scripts/package-linux.sh linux-pkg
+      - run: ./scripts/check-linux-package.sh linux-pkg/nivyx-linux-x86_64.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nivyx-linux-x86_64
+          path: linux-pkg/nivyx-linux-x86_64.tar.gz
+
+  linux-package-distros:
+    # the exact package, unpacked and run on each distribution family with
+    # only its own OpenSSL 3 runtime installed (no compiler, no headers)
+    needs: linux-package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: 'debian:12', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
+          - { image: 'ubuntu:22.04', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
+          - { image: 'ubuntu:24.04', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
+          - { image: 'fedora:latest', deps: 'dnf install -y openssl-libs tar gzip' }
+          - { image: 'archlinux:latest', deps: 'pacman -Sy --noconfirm openssl' }
+          - { image: 'opensuse/tumbleweed', deps: 'zypper -n in libopenssl3 tar gzip' }
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - run: ${{ matrix.deps }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: nivyx-linux-x86_64
+      - name: the engine and the CLI run here
         run: |
-          ./scripts/package-linux.sh linux-pkg
-          tar -tzf linux-pkg/nivyx-linux-x86_64.tar.gz
+          tar -xzf nivyx-linux-x86_64.tar.gz
+          cd nivyx-linux-x86_64
+          ./dpi-proxy --version
+          ./dpi-proxy --capabilities | grep -q '^transparent_mode: supported'
+          bash -n ./nivyx
+          ./nivyx help >/dev/null
 
   shellcheck:
     # the installer, uninstaller, CLI and release/install test scripts
@@ -49,7 +93,8 @@ jobs:
           shellcheck -S warning -e SC1007,SC2034
           scripts/install.sh scripts/uninstall.sh scripts/nivyx scripts/package-linux.sh
           scripts/install-deps-test.sh scripts/update-compat-test-linux.sh
-          scripts/upgrade-test-linux.sh scripts/gen-sbom.sh
+          scripts/upgrade-test-linux.sh scripts/gen-sbom.sh scripts/e2e-test-linux.sh
+          scripts/check-linux-package.sh scripts/sanitize-engine-linux.sh
 
   install-deps:
     # the installer's Debian/Ubuntu dependency auto-install, in clean containers
@@ -63,6 +108,15 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: make sanitize
+
+  engine-sanitizers:
+    # The transparent engine itself (not only the unit tests) under
+    # ASan+UBSan and TSan, intercepting real HTTPS and DNS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev nftables
+      - run: ./scripts/sanitize-engine-linux.sh
 
   packet-mode-compile:
     # Real compile+link against real system dev headers, unlike the
@@ -222,6 +276,19 @@ jobs:
           name: nivyx-windows-x86_64
           path: dist
 
+  linux-arm64:
+    # Linux on 64-bit ARM (Raspberry Pi 4/5, ARM servers): built, unit-
+    # tested and run through the full end-to-end cycle on a real arm64
+    # machine. Installed from source with scripts/install.sh; there is no
+    # arm64 release package, so `nivyx update` is not available there.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev nftables
+      - run: make re && make test
+      - run: ./dpi-proxy --capabilities | grep -q '^transparent_mode: supported'
+      - run: ./scripts/e2e-test-linux.sh
+
   linux-upgrade:
     # v2.1.0 (the real tagged source, installed with its own installer)
     # upgraded in place by this tree's installer.
@@ -235,6 +302,7 @@ jobs:
       - run: ./scripts/upgrade-test-linux.sh v2.1.0
       - run: ./scripts/upgrade-test-linux.sh v2.2.2
       - run: ./scripts/update-compat-test-linux.sh v2.2.2
+      - run: ./scripts/update-compat-test-linux.sh v2.3.0
 
   macos-upgrade:
     # the real v2.1.0 release ZIP (checksum-verified) upgraded in place by

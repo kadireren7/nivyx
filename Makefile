@@ -21,6 +21,13 @@ INCLUDES = -Iinclude
 
 LDFLAGS = -lpthread
 
+# Sanitizer build of the engine itself (not only the unit tests), e.g.
+#   make clean all SAN_CFLAGS="-fsanitize=thread -g"
+# (used by scripts/sanitize-engine-linux.sh; empty for every real build)
+SAN_CFLAGS ?=
+CFLAGS += $(SAN_CFLAGS)
+LDFLAGS += $(SAN_CFLAGS)
+
 # e.g. `make test TEST_CFLAGS="-fsanitize=address,undefined -g"`
 TEST_CFLAGS ?=
 

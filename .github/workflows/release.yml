@@ -11,17 +11,52 @@ permissions:
 
 jobs:
   linux:
+    # The update package is built on the oldest supported baseline
+    # (Ubuntu 22.04: glibc 2.35, OpenSSL 3.0), so the engine in it also
+    # runs on Debian 12, Ubuntu 22.04 and every newer distribution;
+    # v2.3.0's package, built on the runner's Ubuntu 24.04, needed glibc 2.38
     runs-on: ubuntu-latest
+    container: ubuntu:22.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - run: sudo apt-get update && sudo apt-get install -y libssl-dev
+      - run: apt-get update && apt-get install -y --no-install-recommends build-essential libssl-dev pkg-config ca-certificates
       - run: make re
-      - run: strip dpi-proxy
       - run: ./scripts/package-linux.sh linux-pkg
+      - run: ./scripts/check-linux-package.sh linux-pkg/nivyx-linux-x86_64.tar.gz
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nivyx-linux-x86_64
           path: linux-pkg/nivyx-linux-x86_64.tar.gz
+
+  linux-package-distros:
+    # the exact package, unpacked and run on each distribution family with
+    # only its own OpenSSL 3 runtime installed (no compiler, no headers)
+    needs: linux
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: 'debian:12', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
+          - { image: 'ubuntu:22.04', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
+          - { image: 'ubuntu:24.04', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
+          - { image: 'fedora:latest', deps: 'dnf install -y openssl-libs tar gzip' }
+          - { image: 'archlinux:latest', deps: 'pacman -Sy --noconfirm openssl' }
+          - { image: 'opensuse/tumbleweed', deps: 'zypper -n in libopenssl3 tar gzip' }
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - run: ${{ matrix.deps }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: nivyx-linux-x86_64
+      - name: the engine and the CLI run here
+        run: |
+          tar -xzf nivyx-linux-x86_64.tar.gz
+          cd nivyx-linux-x86_64
+          ./dpi-proxy --version
+          ./dpi-proxy --capabilities | grep -q '^transparent_mode: supported'
+          bash -n ./nivyx
+          ./nivyx help >/dev/null
 
   # Linux transparent mode must still pass its real end-to-end cycle
   linux-e2e:
@@ -103,6 +138,7 @@ jobs:
       - run: ./scripts/upgrade-test-linux.sh v2.1.0
       - run: ./scripts/upgrade-test-linux.sh v2.2.2
       - run: ./scripts/update-compat-test-linux.sh v2.2.2
+      - run: ./scripts/update-compat-test-linux.sh v2.3.0
 
   macos-upgrade:
     needs: macos
@@ -172,7 +208,7 @@ jobs:
   publish:
     # nothing is published unless every build and every end-to-end
     # and upgrade test (Linux, Windows, macOS arm64 + x86_64) passed
-    needs: [linux, linux-e2e, linux-upgrade, macos, macos-upgrade, windows, windows-upgrade]
+    needs: [linux, linux-package-distros, linux-e2e, linux-upgrade, macos, macos-upgrade, windows, windows-upgrade]
     runs-on: ubuntu-latest
     permissions:
       contents: write
