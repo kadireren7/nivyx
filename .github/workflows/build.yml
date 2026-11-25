@@ -286,7 +286,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev nftables
       - run: make re && make test
-      - run: ./dpi-proxy --capabilities | grep -q '^transparent_mode: supported'
+      - name: transparent mode is built in
+        run: |
+          ./dpi-proxy --capabilities | grep -q '^transparent_mode: supported'
       - run: ./scripts/e2e-test-linux.sh
 
   linux-upgrade:
