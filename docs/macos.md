@@ -3,7 +3,7 @@
 macOS transparent mode works the same way as on Linux: the built-in
 macOS packet filter (PF) sends this Mac's HTTPS and DNS to the local
 `dpi-proxy` service. It passes the full automated end-to-end test on
-real macOS GitHub runners (macOS 14, 15 and 26 on Apple silicon,
+real macOS GitHub runners (macOS 15 and 26 on Apple silicon,
 macOS 15 on Intel; real PF and launchd, root), and has been field-
 tested on a physical Mac against real ISP-level DPI in Turkey:
 DPI-blocked sites (Discord and others) opened normally with system-

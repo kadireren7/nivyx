@@ -93,7 +93,7 @@ the real `nft` success path.
   build (static OpenSSL), `make test`, `make sanitize`, binary checks
   (architecture, minimum macOS version, system-only libraries), SOCKS5
   smoke test, and the zipped test package as an artifact.
-- `macos-e2e` (macOS 14, 15, 26 on Apple silicon; 15 on Intel): the
+- `macos-e2e` (macOS 15, 26 on Apple silicon; 15 on Intel; the macOS 14 runner is retired - its jobs were cancelled unrun): the
   zipped package extracted and installed as a tester would, then
   `scripts/macos/e2e-test.sh`: real PF interception, original
   destination recovery, DoH, QUIC reject table, IPv6 (where the

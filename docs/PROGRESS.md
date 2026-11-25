@@ -44,6 +44,7 @@ here (stated why).
 | C1 | P2 | CI upgrade tests only from v2.1.0; no old-updater test on Windows; no v2.3.0 baseline | 🟡 Windows: v2.1.0/v2.2.2/v2.3.0 upgrade + v2.2.2/v2.3.0 updaters; Linux: v2.3.0 updater |
 | C2 | P2 | Engine never run under sanitizers (only unit tests) | ✅ locally: SOCKS5 mode ASan/UBSan + TSan under load; 🟡 transparent mode in CI (`engine-sanitizers`) |
 | A1 | P3 | Linux arm64 | 🟡 CI build + unit + e2e on `ubuntu-24.04-arm`; no release asset (no package, updater says so) |
+| C3 | P3 | CI `macos-e2e (macos-14)` was cancelled unrun in every recent run (main too): GitHub retired the image, so macOS 14 had silently no coverage | removed from the matrix; docs say 15 and 26 (arm64) + 15 (Intel). macOS 11-14 are declared (minOS 11.0) but not tested |
 | T1 | P3 | `cmd | grep -q` under `pipefail` can report "no match" on SIGPIPE | fixed where it decides security (updater); other uses checked small outputs, left as is |
 
 ## Decisions

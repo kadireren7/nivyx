@@ -38,7 +38,7 @@ run_one() { # name sanitizer-flags runtime-options
 		# (wait only for these: a bare `wait` would also wait for the engine)
 		local load=""
 		for u in https://example.com/ https://www.wikipedia.org/ https://github.com/ https://www.cloudflare.com/; do
-			for _ in 1 2 3; do fetch "$u" >>"$work/codes" & load="$load $!"; done
+			for _ in 1 2 3; do { fetch "$u"; echo; } >>"$work/codes" & load="$load $!"; done
 		done
 		for _ in $(seq 1 10); do getent ahostsv4 "san-$RANDOM.example.org" >/dev/null 2>&1 & load="$load $!"; done
 		getent ahostsv4 example.net >/dev/null 2>&1 || fails=$((fails + 1))
