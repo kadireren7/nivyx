@@ -578,7 +578,22 @@ function Invoke-Update([bool]$checkOnly) {
         }
         Write-Host 'SHA-256 verified.'
 
-        Expand-Archive -Path $zip -DestinationPath $work -Force
+        # .NET directly, not Expand-Archive: Windows PowerShell started from
+        # PowerShell 7 inherits its PSModulePath and loads an Archive module
+        # it cannot run ("Cannot find an overload for ExtractToDirectory").
+        # Only entries inside nivyx-windows-x86_64\ are accepted; .NET also
+        # refuses any entry that would land outside $work.
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $za = [System.IO.Compression.ZipFile]::OpenRead($zip)
+        try {
+            foreach ($e in $za.Entries) {
+                $n = $e.FullName -replace '\\', '/'
+                if ($n -notmatch '^nivyx-windows-x86_64(/|$)' -or $n -match '(^|/)\.\.(/|$)') {
+                    Write-Host "nivyx: the package contains an unexpected path ($($e.FullName)); nothing was installed"; exit 1
+                }
+            }
+        } finally { $za.Dispose() }
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $work)
         $pkg = Join-Path $work 'nivyx-windows-x86_64'
         $newExe = Join-Path $pkg 'dpi-proxy.exe'
         if (-not (Test-Path $newExe) -or -not (Test-Path (Join-Path $pkg 'nivyx-impl.ps1'))) {

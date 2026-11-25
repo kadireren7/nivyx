@@ -32,6 +32,10 @@ static void	log_windivert_error(DWORD err)
 			why = "WinDivert64.sys was not found next to dpi-proxy.exe "
 				"(removed by antivirus? re-run Install Nivyx.cmd)";
 			break ;
+		case ERROR_BAD_EXE_FORMAT:
+			why = "WinDivert64.sys is damaged or not a 64-bit driver "
+				"(download and extract the ZIP again)";
+			break ;
 		case ERROR_ACCESS_DENIED:
 			why = "access denied (not running as Administrator/SYSTEM, "
 				"or blocked by security software)";
