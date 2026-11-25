@@ -41,7 +41,7 @@ function Version-Of { return ((& (Join-Path $InstDir 'nivyx.cmd') version 2>&1 |
 $newVersion = ((& (Join-Path $NewPackage 'dpi-proxy.exe') --version 2>&1 | Out-String).Trim() -replace '^dpi-proxy\s+', '')
 $oldVersion = ((& (Join-Path $OldPackage 'dpi-proxy.exe') --version 2>&1 | Out-String).Trim() -replace '^dpi-proxy\s+', '')
 if (-not ([version]$newVersion -gt [version]$oldVersion)) {
-    Die "candidate $newVersion is not newer than $oldVersion: the old updater would (rightly) refuse it; bump VERSION"
+    Die "candidate $newVersion is not newer than ${oldVersion}: the old updater would (rightly) refuse it; bump VERSION"
 }
 
 Step "install the real $oldVersion package"
