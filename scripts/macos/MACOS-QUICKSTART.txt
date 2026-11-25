@@ -54,9 +54,10 @@ UNINSTALL
   Double-click "Uninstall Nivyx.command" (in the extracted folder), or
   manually, in the extracted folder:
          sudo ./uninstall.sh
-  Removes everything: the service, the programs, settings, logs and
-  dpi-proxy's firewall (PF) rules. Add --purge (manual only) to also
-  remove /usr/local/etc/dpi-proxy.
+  Removes the service, the programs and Nivyx's firewall (PF) rules;
+  your settings, learned decisions and logs are kept for a later
+  reinstall. To remove those too (manual only):
+         sudo ./uninstall.sh --purge
 
 Passes a full automated end-to-end test on real macOS runners in CI
 (PF, launchd, root), and has been field-tested on a physical Mac

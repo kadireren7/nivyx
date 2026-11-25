@@ -183,7 +183,31 @@ Update available.
 Configuration and learned state are never touched. There is no
 telemetry, no background checking and no automatic update: it runs only
 when you invoke it. `NIVYX_RELEASE_API` overrides the release endpoint
-(used by the test suite; a notice is printed whenever it is set).
+for the test suite only: a notice is printed whenever it is set, and it
+must point at this machine (`http://127.0.0.1:PORT/...`) — any other
+override is refused, so it can never pull an update from elsewhere.
+
+Every file the update replaces (engine, CLI, man page, completions) is
+backed up under a unique name first, and the package is refused if it
+contains links or paths outside its own folder. If the rollback itself
+cannot bring the previous version back to health, the backup is kept
+and its location printed. "Nivyx updated" is printed only after the
+health check passed. Only one install, update, repair or uninstall runs
+at a time.
+
+### Status: what "Active" means
+
+`Protection: Active` needs all of: the service running, a status file
+written by *that* service process (pid match), a heartbeat newer than
+45 s (the engine rewrites it every 10 s) and, where visible, the
+interception rules loaded. A file left by a previous process shows
+`Starting`; a running service whose engine stopped writing shows
+`Degraded (engine not responding ...)`. Working HTTPS alone never counts
+as protection: with the engine gone, traffic goes out directly
+(fail-open) and HTTPS still works. `diagnose` reports whether a site
+loads; whether the bypass was *needed* or *effective* on your network
+can only be seen in the learned decisions (`strategy DOMAIN`,
+`stats`).
 
 ## support-bundle [FILE]
 

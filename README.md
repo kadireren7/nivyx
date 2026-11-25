@@ -26,7 +26,7 @@ man-in-the-middles TLS.
 
 | Platform | What you get | Validation |
 |---|---|---|
-| Linux | **Transparent automatic mode** | Real ISP/DPI field-tested |
+| Linux (x86_64; arm64 from source) | **Transparent automatic mode** | Real ISP/DPI field-tested (x86_64); arm64 CI-tested |
 | Windows 10/11 (x64) | **Transparent automatic mode** | Real ISP/DPI field-tested |
 | macOS (Apple silicon, Intel) | **Transparent automatic mode** | Real ISP/DPI field-tested |
 
@@ -173,6 +173,10 @@ ask.
   [docs/windows.md](docs/windows.md), [docs/macos.md](docs/macos.md).
 
 ## Uninstall
+
+A plain uninstall keeps your settings and learned state on every
+platform (a reinstall picks them up); `--purge` (Windows: `-Purge`)
+removes them too.
 
 Linux: `sudo ./scripts/uninstall.sh` (details: [docs/linux.md](docs/linux.md)).
 Windows: double-click `Uninstall Nivyx.cmd` (details: [docs/windows.md](docs/windows.md)).

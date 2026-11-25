@@ -63,14 +63,13 @@ window says whether it worked:
 | 1 | not elevated | nothing |
 | 2 | a package file is missing (damaged or partial download) | nothing |
 | 3 | `install.ps1` not next to the launcher (run from inside the ZIP) | nothing |
-| 4 | the service did not start or failed its health check | service removed again; normal networking; the last log lines are shown |
+| 4 | the service did not start or failed its health check | a fresh install is removed again; an upgrade puts the previous version back and starts it; the last log lines are shown |
+| 5 | an upgrade failed **and** the previous version could not be started again | its files are kept in `%ProgramData%\nivyx-install-backup-*`; networking works normally |
 | 1223 | the UAC prompt was declined | nothing |
 
-A failed install never leaves interception behind: the service is
+A failed install never leaves interception behind: the new service is
 stopped and deleted, and WinDivert stops diverting the moment the
-engine exits. An *upgrade* that fails at code 4 removes the previous
-service too (networking keeps working, unprotected) — re-run the
-previous version's installer or `nivyx repair` once fixed.
+engine exits.
 
 If the service cannot start, `dpi-proxy.log` (and the installer output)
 says why, e.g. `WinDivert could not be opened: error 577` (driver
