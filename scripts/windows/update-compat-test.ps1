@@ -81,6 +81,10 @@ $env:NIVYX_RELEASE_API = "http://127.0.0.1:$port/latest.json"
 Pass "serving $zip"
 
 Step "the $oldVersion updater installs the candidate"
+# As on a user's machine: Windows PowerShell with its own module path, not
+# the one inherited from this PowerShell 7 session (the old updaters use
+# Expand-Archive, which then loads a module Windows PowerShell cannot run).
+$env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
 $out = (& (Join-Path $InstDir 'nivyx.cmd') update 2>&1 | Out-String); Write-Host $out
 $rc = $LASTEXITCODE
 Remove-Item Env:\NIVYX_RELEASE_API
