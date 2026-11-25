@@ -9,6 +9,27 @@ Legend: ✅ done and verified (where/how stated) · 🟡 done, verified in CI
 only (no local root/Windows/macOS) · ⏳ waiting for CI · ⛔ not possible
 here (stated why).
 
+## CI status (2026-11-26, branch `hardening/cross-platform`)
+
+Run 45723297716: 27 of 30 jobs passed — all Windows jobs except one
+upgrade run (e2e incl. failed-install/restore scenarios; in-place upgrades
+from v2.1.0, v2.2.2, v2.3.0; the v2.2.2 and v2.3.0 updaters installing the
+candidate), Linux e2e on Ubuntu 26.04, Linux upgrade (incl. failed-migration
+rollback, v2.2.2 and v2.3.0 updaters), macOS e2e (15, 26 arm64; 15 Intel)
+and upgrade, update package on Debian 12 / Ubuntu 22.04 / 24.04 /
+Tumbleweed, source builds against OpenSSL 4 (Fedora, Arch), sanitizers,
+shellcheck.
+
+Not passing:
+- `engine-sanitizers`: TSan finding E2 (open, see below). ASan+UBSan part passed.
+- `linux-arm64` (`stats printed no connection counters`, while a reload
+  was running) and `windows-upgrade (v2.3.0, upgrade)` (example.com reset
+  the connection through the tlsrec rule): both passed in the previous run
+  (45722279865) on the same code under test; treated as flaky, not fixed.
+
+So every ✅/🟡 item below that names a CI test was seen passing in CI at
+least once on the final code, except E2.
+
 ## Findings and status
 
 | ID | Sev | Finding | Status |
@@ -44,6 +65,7 @@ here (stated why).
 | C1 | P2 | CI upgrade tests only from v2.1.0; no old-updater test on Windows; no v2.3.0 baseline | 🟡 Windows: v2.1.0/v2.2.2/v2.3.0 upgrade + v2.2.2/v2.3.0 updaters; Linux: v2.3.0 updater |
 | C2 | P2 | Engine never run under sanitizers (only unit tests) | ✅ locally: SOCKS5 mode ASan/UBSan + TSan under load; 🟡 transparent mode in CI (`engine-sanitizers`) |
 | A1 | P3 | Linux arm64 | 🟡 CI build + unit + e2e on `ubuntu-24.04-arm`; no release asset (no package, updater says so) |
+| E2 | P2 | TSan (transparent mode, CI `engine-sanitizers`): data race between two DNS worker threads sharing the DoH `SSL_CTX` — `ASN1_STRING_set` (holding the store lock) vs `ASN1_STRING_cmp` (no lock), both inside libcrypto, both called from `tlsc_handshake` (`dns_doh.c:263`). On Linux the roots come from `SSL_CTX_set_default_verify_paths()` (hash directory, loaded lazily), so the shared store is written during handshakes | **open; the TSan job fails on it.** Not suppressed (that would relax the test). Could be OpenSSL-internal (libcrypto is not instrumented) or real. Possible fix: load the CA bundle once at start so the store is never written concurrently (more RSS; changes when new system CAs are seen) — decision for you. ASan+UBSan in transparent mode: clean (24/24 requests, clean stop, no table left) |
 | C3 | P3 | CI `macos-e2e (macos-14)` was cancelled unrun in every recent run (main too): GitHub retired the image, so macOS 14 had silently no coverage | removed from the matrix; docs say 15 and 26 (arm64) + 15 (Intel). macOS 11-14 are declared (minOS 11.0) but not tested |
 | T1 | P3 | `cmd | grep -q` under `pipefail` can report "no match" on SIGPIPE | fixed where it decides security (updater); other uses checked small outputs, left as is |
 
