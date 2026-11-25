@@ -266,9 +266,19 @@ jobs:
         run: ./scripts/macos/upgrade-test.sh "$RUNNER_TEMP/old/nivyx-macos-${{ matrix.arch }}" "$RUNNER_TEMP/new/nivyx-macos-${{ matrix.arch }}"
 
   windows-upgrade:
-    # the real v2.1.0 release ZIP (checksum-verified) upgraded in place by
-    # the package built from this tree, with real WinDivert
+    # real released packages (checksum-verified) upgraded in place by the
+    # package built from this tree, and the old releases' own updaters
+    # installing it, with real WinDivert
     needs: windows
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { tag: v2.1.0, test: upgrade }
+          - { tag: v2.2.2, test: upgrade }
+          - { tag: v2.3.0, test: upgrade }
+          - { tag: v2.2.2, test: update-compat }
+          - { tag: v2.3.0, test: update-compat }
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -276,17 +286,22 @@ jobs:
         with:
           name: nivyx-windows-x86_64
           path: candidate
-      - name: v2.1.0 package
+      - name: ${{ matrix.tag }} package (checksum-verified)
         shell: pwsh
         run: |
-          $base = 'https://github.com/kadireren7/nivyx/releases/download/v2.1.0'
+          $base = "https://github.com/kadireren7/nivyx/releases/download/${{ matrix.tag }}"
           Invoke-WebRequest "$base/nivyx-windows-x86_64.zip" -OutFile old.zip
           Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
           $want = (Select-String -Path SHA256SUMS -Pattern 'nivyx-windows-x86_64.zip').Line.Split(' ')[0].ToLower()
           $got = (Get-FileHash old.zip -Algorithm SHA256).Hash.ToLower()
-          if ($want -ne $got) { throw "v2.1.0 zip checksum mismatch" }
+          if ($want -ne $got) { throw "${{ matrix.tag }} zip checksum mismatch" }
           Expand-Archive old.zip -DestinationPath old
           Get-ChildItem old
-      - name: upgrade v2.1.0 -> candidate (real WinDivert, Administrator)
+      - name: install the candidate over ${{ matrix.tag }} (real WinDivert, Administrator)
+        if: matrix.test == 'upgrade'
         shell: pwsh
-        run: ./scripts/windows/upgrade-test.ps1 -OldPackage old/nivyx-windows-x86_64 -NewPackage candidate
+        run: ./scripts/windows/upgrade-test.ps1 -OldPackage old/nivyx-windows-x86_64 -NewPackage candidate -OldTag ${{ matrix.tag }}
+      - name: the ${{ matrix.tag }} updater installs the candidate (real WinDivert, Administrator)
+        if: matrix.test == 'update-compat'
+        shell: pwsh
+        run: ./scripts/windows/update-compat-test.ps1 -OldPackage old/nivyx-windows-x86_64 -NewPackage candidate

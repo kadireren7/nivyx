@@ -36,7 +36,67 @@ function Fetch($url) {
     return "$out"
 }
 
-Step 'install'
+# The double-click launcher, run as a user would but with an empty stdin
+# so its final "press a key" returns at once; returns its exit code.
+$script:emptyIn = Join-Path $env:TEMP "nivyx-e2e-empty-$PID.txt"
+Set-Content -Encoding ASCII $script:emptyIn ''
+function Invoke-Launcher([string]$cmdPath) {
+    $p = Start-Process -FilePath cmd.exe -ArgumentList '/c', "`"$cmdPath`"" `
+        -RedirectStandardInput $script:emptyIn -NoNewWindow -Wait -PassThru
+    return $p.ExitCode
+}
+function Assert-NotInstalled([string]$what) {
+    if (Get-Service dpi-proxy -ErrorAction SilentlyContinue) { Die "$what left the dpi-proxy service behind" }
+    $c = Fetch 'https://example.com/'
+    if ($c -notmatch '^[23]\d\d$') { Die "$what broke normal HTTPS -> '$c'" }
+}
+
+Step 'engine run directly: --service outside the service manager explains itself'
+$out = (& (Join-Path $Package 'dpi-proxy.exe') --service 2>&1 | Out-String)
+$rc = $LASTEXITCODE
+if ($rc -ne 1063 -or $out -notmatch 'Install Nivyx\.cmd') { Die "dpi-proxy.exe --service from a terminal: exit $rc, output: $out" }
+$out = (& (Join-Path $Package 'dpi-proxy.exe') --version 2>&1 | Out-String)
+if ($out -notmatch '^dpi-proxy \d') { Die "--version output changed (the updater of v2.2/v2.3 parses it): $out" }
+Pass "--service from a terminal: exit $rc with instructions; --version unchanged"
+
+Step 'launcher: run from inside the ZIP (nothing next to it)'
+$lone = Join-Path $env:TEMP "nivyx-e2e-lone-$PID"
+New-Item -ItemType Directory -Force -Path $lone | Out-Null
+Copy-Item (Join-Path $Package 'Install Nivyx.cmd') $lone
+$rc = Invoke-Launcher (Join-Path $lone 'Install Nivyx.cmd')
+if ($rc -ne 3) { Die "Install Nivyx.cmd without install.ps1 exited $rc (expected 3)" }
+Assert-NotInstalled 'a launcher without its package'
+Remove-Item $lone -Recurse -Force
+Pass 'exit 3, nothing installed'
+
+Step 'launcher: damaged package (driver file missing)'
+$bad = Join-Path $env:TEMP "nivyx-e2e-bad-$PID"
+Copy-Item $Package $bad -Recurse
+Remove-Item (Join-Path $bad 'WinDivert64.sys')
+$rc = Invoke-Launcher (Join-Path $bad 'Install Nivyx.cmd')
+if ($rc -ne 2) { Die "Install Nivyx.cmd with WinDivert64.sys missing exited $rc (expected 2)" }
+Assert-NotInstalled 'a package with a missing file'
+Pass 'exit 2 passed through the launcher, nothing installed, HTTPS fine'
+
+Step 'launcher: service that cannot start (corrupt driver file)'
+Set-Content -Encoding ASCII (Join-Path $bad 'WinDivert64.sys') 'not a driver'
+$rc = Invoke-Launcher (Join-Path $bad 'Install Nivyx.cmd')
+if ($rc -ne 4) { Die "Install Nivyx.cmd with a corrupt driver exited $rc (expected 4)" }
+Assert-NotInstalled 'a failed service start'
+if (-not (Select-String -Path $LogFile -Pattern 'WinDivert could not be opened: error \d+' -Quiet)) {
+    Die 'the log does not say why WinDivert failed'
+}
+Write-Host (Select-String -Path $LogFile -Pattern 'WinDivert could not be opened' | Select-Object -Last 1).Line
+Remove-Item $bad -Recurse -Force
+Pass 'exit 4, service removed (fail-open), HTTPS fine, reason logged'
+
+Step 'install (double-click launcher, elevated)'
+$rc = Invoke-Launcher (Join-Path $Package 'Install Nivyx.cmd')
+if ($rc -ne 0) { Die "Install Nivyx.cmd exited $rc" }
+if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service not running after Install Nivyx.cmd' }
+Pass 'Install Nivyx.cmd exit 0'
+
+Step 'install (install.ps1 directly, over the existing install)'
 & powershell -ExecutionPolicy Bypass -File (Join-Path $Package 'install.ps1')
 if ($LASTEXITCODE -ne 0) { Die "install.ps1 exited $LASTEXITCODE" }
 if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service not running' }

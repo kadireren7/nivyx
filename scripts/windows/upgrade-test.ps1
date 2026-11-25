@@ -1,16 +1,21 @@
 #Requires -Version 5.1
 <#
   Upgrade regression test on a real Windows machine (CI: windows-latest,
-  Administrator): the real v2.1.0 package is installed, then the candidate
-  package is installed over it, exactly as a user would. Uninstalls at the
-  end.
+  Administrator): a real released package (v2.1.0, v2.2.2, v2.3.0, ...) is
+  installed, then the candidate package is installed over it, exactly as a
+  user would. Uninstalls at the end.
 
-    powershell -ExecutionPolicy Bypass -File upgrade-test.ps1 -OldPackage <dir> -NewPackage <dir>
+    powershell -ExecutionPolicy Bypass -File upgrade-test.ps1 -OldPackage <dir> -NewPackage <dir> [-OldTag v2.1.0]
+
+  -OldTag v2.1.0 (the default) also checks that the v2.1 command wrappers
+  (dpictl*) existed before and are removed by the upgrade.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$OldPackage,
-    [Parameter(Mandatory = $true)][string]$NewPackage
+    [Parameter(Mandatory = $true)][string]$NewPackage,
+    [string]$OldTag = 'v2.1.0'
 )
+$Legacy = ($OldTag -eq 'v2.1.0')
 
 $ErrorActionPreference = 'Stop'
 $DataDir    = Join-Path $env:ProgramData 'dpi-proxy'
@@ -36,17 +41,19 @@ function Field($name) {
 function Fetch($url) { return "$(& curl.exe -sS -o NUL -w '%{http_code}' --max-time 20 $url 2>&1)" }
 function Version-Of { return ((& (Join-Path $InstDir 'nivyx.cmd') version 2>&1 | Out-String).Trim() -replace '^Nivyx\s+', '') }
 
-Step 'install the real v2.1.0 package'
+Step "install the real $OldTag package"
 & powershell -ExecutionPolicy Bypass -File (Join-Path $OldPackage 'install.ps1')
-if ($LASTEXITCODE -ne 0) { Die "v2.1.0 install.ps1 exited $LASTEXITCODE" }
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'v2.1.0 service not running' }
-foreach ($old in 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'dpictl-impl.ps1') {
-    if (-not (Test-Path (Join-Path $InstDir $old))) { Die "the v2.1.0 layout lacks $old; wrong baseline?" }
+if ($LASTEXITCODE -ne 0) { Die "$OldTag install.ps1 exited $LASTEXITCODE" }
+if ((Get-Service dpi-proxy).Status -ne 'Running') { Die "$OldTag service not running" }
+if ($Legacy) {
+    foreach ($old in 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'dpictl-impl.ps1') {
+        if (-not (Test-Path (Join-Path $InstDir $old))) { Die "the v2.1.0 layout lacks $old; wrong baseline?" }
+    }
 }
 $oldVersion = Version-Of
 $c = Fetch 'https://example.com/'
-if ($c -notmatch '^[23]\d\d$') { Die "v2.1.0 HTTPS -> '$c'" }
-Pass "v2.1.0 installed (version $oldVersion), legacy wrappers present, HTTPS $c"
+if ($c -notmatch '^[23]\d\d$') { Die "$OldTag HTTPS -> '$c'" }
+Pass "$OldTag installed (version $oldVersion), HTTPS $c"
 
 Step 'user state that must survive'
 Add-Content $Conf "`n[domains]`nexample.com = tlsrec"
@@ -61,7 +68,7 @@ Pass "rule written ($decisionsBefore decisions on record)"
 
 Step 'upgrade: install the candidate package over it'
 & powershell -ExecutionPolicy Bypass -File (Join-Path $NewPackage 'install.ps1')
-if ($LASTEXITCODE -ne 0) { Die "candidate install.ps1 exited $LASTEXITCODE over v2.1.0" }
+if ($LASTEXITCODE -ne 0) { Die "candidate install.ps1 exited $LASTEXITCODE over $OldTag" }
 if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service not running after the upgrade' }
 
 Step 'after the upgrade'
@@ -113,4 +120,4 @@ $c = Fetch 'https://example.com/'
 if ($c -notmatch '^[23]\d\d$') { Die "after uninstall -> '$c'" }
 Pass "uninstalled; HTTPS $c"
 
-Write-Host "`nWINDOWS UPGRADE v2.1.0 -> candidate: ALL CHECKS PASSED" -ForegroundColor Green
+Write-Host "`nWINDOWS UPGRADE $OldTag -> candidate: ALL CHECKS PASSED" -ForegroundColor Green

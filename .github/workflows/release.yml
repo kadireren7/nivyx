@@ -129,7 +129,18 @@ jobs:
       - run: ./scripts/macos/upgrade-test.sh "$RUNNER_TEMP/old/nivyx-macos-${{ matrix.arch }}" "$RUNNER_TEMP/new/nivyx-macos-${{ matrix.arch }}"
 
   windows-upgrade:
+    # the release ZIP: installed over each older release, and installed by
+    # the older releases' own updaters
     needs: windows
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { tag: v2.1.0, test: upgrade }
+          - { tag: v2.2.2, test: upgrade }
+          - { tag: v2.3.0, test: upgrade }
+          - { tag: v2.2.2, test: update-compat }
+          - { tag: v2.3.0, test: update-compat }
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -137,19 +148,26 @@ jobs:
         with:
           name: nivyx-windows-x86_64
           path: artifact
-      - name: release package and v2.1.0 package
+      - name: ${{ matrix.tag }} package (checksum-verified)
         shell: pwsh
         run: |
-          Expand-Archive artifact/nivyx-windows-x86_64.zip -DestinationPath new
-          $base = 'https://github.com/kadireren7/nivyx/releases/download/v2.1.0'
+          $base = "https://github.com/kadireren7/nivyx/releases/download/${{ matrix.tag }}"
           Invoke-WebRequest "$base/nivyx-windows-x86_64.zip" -OutFile old.zip
           Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
           $want = (Select-String -Path SHA256SUMS -Pattern 'nivyx-windows-x86_64.zip').Line.Split(' ')[0].ToLower()
           $got = (Get-FileHash old.zip -Algorithm SHA256).Hash.ToLower()
-          if ($want -ne $got) { throw "v2.1.0 zip checksum mismatch" }
+          if ($want -ne $got) { throw "${{ matrix.tag }} zip checksum mismatch" }
           Expand-Archive old.zip -DestinationPath old
-      - shell: pwsh
-        run: ./scripts/windows/upgrade-test.ps1 -OldPackage old/nivyx-windows-x86_64 -NewPackage new/nivyx-windows-x86_64
+          Get-ChildItem old
+          Expand-Archive artifact/nivyx-windows-x86_64.zip -DestinationPath new
+      - name: install the candidate over ${{ matrix.tag }} (real WinDivert, Administrator)
+        if: matrix.test == 'upgrade'
+        shell: pwsh
+        run: ./scripts/windows/upgrade-test.ps1 -OldPackage old/nivyx-windows-x86_64 -NewPackage new/nivyx-windows-x86_64 -OldTag ${{ matrix.tag }}
+      - name: the ${{ matrix.tag }} updater installs the candidate (real WinDivert, Administrator)
+        if: matrix.test == 'update-compat'
+        shell: pwsh
+        run: ./scripts/windows/update-compat-test.ps1 -OldPackage old/nivyx-windows-x86_64 -NewPackage new/nivyx-windows-x86_64 -NewZip artifact/nivyx-windows-x86_64.zip
 
   publish:
     # nothing is published unless every build and every end-to-end
