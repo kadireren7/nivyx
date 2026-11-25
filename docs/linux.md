@@ -122,6 +122,14 @@ changes nothing — update there with `git pull && sudo ./scripts/install.sh`.
 on Debian 12 and Ubuntu 22.04.) openSUSE Leap and OpenSSL 1.1 systems are
 not tested.
 
+Fail-open after a crash: when the engine dies (crash, OOM killer,
+`kill -9`), systemd's `ExecStopPost` deletes the nftables table at once
+and HTTPS goes out directly until the automatic restart 2 s later. One
+exception seen on systemd 259 (Ubuntu 26.04): after an administrator's
+`systemctl kill`, systemd skips `ExecStopPost`, so HTTPS fails until the
+restart (about 2 s; at most 30 s if the restart itself fails, when the
+heartbeat-gated rule expires). Use `sudo nivyx stop` to stop it cleanly.
+
 x86_64 and **arm64**: arm64 is built, unit-tested and end-to-end tested
 in CI on a real arm64 machine, installed from source with
 `scripts/install.sh`. There is no arm64 release package, so on arm64

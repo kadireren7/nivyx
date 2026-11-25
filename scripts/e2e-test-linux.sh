@@ -120,7 +120,11 @@ pass "stopped: table gone, HTTPS $c"
 stepn "crash = fail-open, then automatic restart"
 sudo systemctl start nivyx
 sleep 3
-sudo systemctl kill -s KILL nivyx
+# A crash as it really happens (SIGSEGV, OOM killer, kill -9): the signal
+# comes from outside systemd. (`systemctl kill` is not that: systemd 259 -
+# Ubuntu 26.04 - then skips ExecStopPost, and the table stays until the
+# restart 2 s later; checked separately below.)
+sudo kill -9 "$(systemctl show -p MainPID --value nivyx)"
 sleep 1
 c="$(fetch https://example.com/)"
 if ! ok "$c"; then
@@ -154,6 +158,17 @@ for _ in $(seq 1 20); do systemctl is-active --quiet nivyx && break; sleep 1; do
 systemctl is-active --quiet nivyx || die "not restarted"
 sleep 3
 c="$(fetch https://example.com/)"; ok "$c" || die "after restart -> '$c'"
+# systemctl kill: whatever systemd does with ExecStopPost, HTTPS must work
+# again by the time the automatic restart has happened (RestartSec=2)
+sudo systemctl kill -s KILL nivyx
+ok_after=""
+for i in 1 2 3 4 5 6 7 8; do
+	sleep 1
+	c="$(fetch https://example.com/)"
+	if ok "$c"; then ok_after=$i; break; fi
+done
+[ -n "$ok_after" ] || die "HTTPS still failing 8 s after systemctl kill -> '$c'"
+echo "after systemctl kill: HTTPS works again after ${ok_after}s"
 pass "killed: fail-open, restarted, HTTPS $c"
 
 stepn "nivyx commands"
