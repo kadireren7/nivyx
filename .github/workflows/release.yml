@@ -39,8 +39,6 @@ jobs:
           - { image: 'debian:12', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
           - { image: 'ubuntu:22.04', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
           - { image: 'ubuntu:24.04', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
-          - { image: 'fedora:latest', deps: 'dnf install -y openssl-libs tar gzip' }
-          - { image: 'archlinux:latest', deps: 'pacman -Sy --noconfirm openssl' }
           - { image: 'opensuse/tumbleweed', deps: 'zypper -n in libopenssl3 tar gzip' }
     runs-on: ubuntu-latest
     container: ${{ matrix.image }}

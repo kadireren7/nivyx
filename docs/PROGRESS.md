@@ -25,7 +25,9 @@ here (stated why).
 | L3 | P1 | Failed Linux reinstall: no rollback | 🟡 full backup/restore of files, units, enabled/active state |
 | L4 | P2 | Migration with both `/etc/dpi-proxy` and `/etc/nivyx`: differing old files silently dropped | 🟡 kept as `*.legacy` |
 | L5 | P2 | Linux plain uninstall deletes learned state (Windows keeps it) | 🟡 kept unless `--purge`; unknown options rejected; verifies no interception left |
-| L6 | P1 | v2.3.0 Linux update package needs glibc 2.38: `nivyx update` refuses it on Debian 12 / Ubuntu 22.04 | ✅ measured on the v2.3.0 asset; fix 🟡: built in `ubuntu:22.04`, `check-linux-package.sh` enforces ≤ 2.35, distro matrix |
+| L6 | P1 | v2.3.0 Linux update package needs glibc 2.38: `nivyx update` refuses it on Debian 12 / Ubuntu 22.04 | ✅ measured on the v2.3.0 asset; fix ✅ CI: built in `ubuntu:22.04`, `check-linux-package.sh` enforces ≤ 2.35, runs on Debian 12, Ubuntu 22.04/24.04, Tumbleweed |
+| L7 | P1 | Fedora 45 (OpenSSL 4.0.3) and Arch (4.1.0) have no `libssl.so.3`: no prebuilt Linux engine (old or new) runs there, so `nivyx update` cannot work | ✅ seen in CI; refusal now explains and points to `git pull && install.sh`; source build against OpenSSL 4 in CI (`linux-source-openssl4`) ⏳. A package for OpenSSL 4 (or static OpenSSL) is not done: decision for you |
+| L8 | P1 | **Fail-open after SIGKILL broken on Ubuntu 26.04** (now `ubuntu-latest`): 1 s after `systemctl kill -s KILL` the unit is in auto-restart but the nft table is still there (ExecStopPost did not remove it); HTTPS refused until the restart / the 30 s alive timeout. Fails on unchanged `main` too; passes on Ubuntu 24.04 (arm64 job) | ✅ reproduced in CI with diagnostics; root cause in systemd ⏳ (next run tells whether a real crash, `kill -9`, behaves the same) |
 | M1 | P1 | macOS uninstall always removes settings, learned state, logs; `--purge` does not exist | 🟡 kept unless `--purge` |
 | M2 | P2 | macOS `.command` launchers always exit 0 | 🟡 real code |
 | M3 | P1 | Failed macOS reinstall leaves the old install broken (binary replaced, plist deleted) | 🟡 previous files + job restored |
@@ -41,7 +43,6 @@ here (stated why).
 | C1 | P2 | CI upgrade tests only from v2.1.0; no old-updater test on Windows; no v2.3.0 baseline | 🟡 Windows: v2.1.0/v2.2.2/v2.3.0 upgrade + v2.2.2/v2.3.0 updaters; Linux: v2.3.0 updater |
 | C2 | P2 | Engine never run under sanitizers (only unit tests) | ✅ locally: SOCKS5 mode ASan/UBSan + TSan under load; 🟡 transparent mode in CI (`engine-sanitizers`) |
 | A1 | P3 | Linux arm64 | 🟡 CI build + unit + e2e on `ubuntu-24.04-arm`; no release asset (no package, updater says so) |
-| F1 | P2 | Linux e2e "crash = fail-open" failed once in CI (refused connection 1 s after SIGKILL); same code passed on main | ⏳ observed flake, not changed; see risks |
 | T1 | P3 | `cmd | grep -q` under `pipefail` can report "no match" on SIGPIPE | fixed where it decides security (updater); other uses checked small outputs, left as is |
 
 ## Decisions

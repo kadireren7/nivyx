@@ -27,7 +27,7 @@ run_one() { # name sanitizer-flags runtime-options
 	: >"$work/engine.log"
 	sudo env $opts DPI_PROXY_STRATEGY_CONF="$work/strategy.conf" \
 		DPI_PROXY_TP_STATUS="$work/status" DPI_PROXY_TP_DECISIONS="$work/decisions" \
-		"$ROOT/dpi-proxy" --mode transparent >>"$work/engine.log" 2>&1 &
+		"$ROOT/dpi-proxy" --mode transparent 2>&1 | tee -a "$work/engine.log" >/dev/null &
 	pid=$!
 	for i in $(seq 1 60); do
 		sudo grep -q '^engine: running' "$work/status" 2>/dev/null && break

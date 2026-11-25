@@ -132,6 +132,22 @@ if ! ok "$c"; then
 	getent ahostsv4 example.com | head -3 || true
 	sudo conntrack -L -p tcp --dport 443 2>/dev/null | head -5 || true
 	curl -v -sS -o /dev/null --max-time 10 https://example.com/ 2>&1 | grep -E 'Trying|Connected|connect' | head -5 || true
+	echo "--- systemd ---"; systemctl --version | head -1
+	journalctl -u nivyx -o short-precise -n 15 --no-pager || true
+	sleep 4
+	echo "--- 5 s after SIGKILL ---"
+	systemctl show nivyx -p ActiveState,SubState,MainPID --no-pager || true
+	echo "fetch: $(fetch https://example.com/)"
+	# a real crash (signal from outside systemd) instead of systemctl kill
+	for _ in $(seq 1 20); do systemctl is-active --quiet nivyx && break; sleep 1; done
+	sleep 3
+	sudo kill -9 "$(systemctl show -p MainPID --value nivyx)" || true
+	sleep 1
+	echo "--- 1 s after kill -9 of the main process ---"
+	systemctl show nivyx -p ActiveState,SubState,Result --no-pager || true
+	sudo nft list table inet dpi_proxy_tp >/dev/null 2>&1 && echo "table: still present" || echo "table: removed"
+	echo "fetch: $(fetch https://example.com/)"
+	journalctl -u nivyx -o short-precise -n 8 --no-pager || true
 	die "right after a crash -> '$c'"
 fi
 for _ in $(seq 1 20); do systemctl is-active --quiet nivyx && break; sleep 1; done
@@ -300,6 +316,16 @@ trap - EXIT
 pass "service survived, DNS recovered when the resolvers returned (no permanent loss)"
 
 stepn "update: check, bad checksum, broken release (rollback), good release"
+if [ "$(uname -m)" != x86_64 ]; then
+	# there is no release package for this architecture: the updater must
+	# say so and change nothing (update = git pull + install.sh here)
+	out="$(sudo nivyx update 2>&1 || true)"; echo "$out"
+	if echo "$out" | grep -q 'Update available'; then
+		echo "$out" | grep -q "no release asset for this architecture" || die "update on $(uname -m) did not refuse clearly"
+	fi
+	systemctl is-active --quiet nivyx || die "service down after a refused update"
+	pass "$(uname -m): no release package; update refuses and leaves the install alone"
+else
 mock="$(mktemp -d)"; port=18765
 current="$(nivyx version | awk '{print $2}')"
 mk_release() {	# $1 = engine file, $2 = SHA256SUMS mode (good|bad), $3 = version tag
@@ -340,7 +366,7 @@ t=0
 until curl -fsS --max-time 3 "http://127.0.0.1:$port/latest.json" >/dev/null 2>&1 || [ $t -ge 15 ]; do sleep 1; t=$((t + 1)); done
 curl -fsS --max-time 3 "http://127.0.0.1:$port/latest.json" >/dev/null 2>&1 || { cat "$mock/httpd.log"; die "the local mock release server is not reachable"; }
 export NIVYX_RELEASE_API="http://127.0.0.1:$port/latest.json"
-upd() { sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update "$@"; }
+upd() { sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update; }
 
 out="$(nivyx update --check)"; echo "$out"
 echo "$out" | grep -q 'Update available' || die "update --check did not report the newer release"
@@ -376,6 +402,8 @@ out="$(nivyx update --check)"; echo "$out"; echo "$out" | grep -q 'up to date' |
 kill "$httpd" 2>/dev/null || true
 unset NIVYX_RELEASE_API
 pass "check ok; bad checksum rejected; broken release rolled back; good release installed ($current -> 99.0.0), config kept"
+
+fi
 
 stepn "size and resource use"
 ls -l /usr/local/bin/nivyx-engine

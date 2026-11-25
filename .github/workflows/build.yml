@@ -63,8 +63,6 @@ jobs:
           - { image: 'debian:12', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
           - { image: 'ubuntu:22.04', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
           - { image: 'ubuntu:24.04', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
-          - { image: 'fedora:latest', deps: 'dnf install -y openssl-libs tar gzip' }
-          - { image: 'archlinux:latest', deps: 'pacman -Sy --noconfirm openssl' }
           - { image: 'opensuse/tumbleweed', deps: 'zypper -n in libopenssl3 tar gzip' }
     runs-on: ubuntu-latest
     container: ${{ matrix.image }}
@@ -81,6 +79,27 @@ jobs:
           ./dpi-proxy --capabilities | grep -q '^transparent_mode: supported'
           bash -n ./nivyx
           ./nivyx help >/dev/null
+
+  linux-source-openssl4:
+    # Fedora and Arch ship OpenSSL 4 (libssl.so.4): the prebuilt update
+    # package (OpenSSL 3) cannot run there, so these install from source -
+    # check that the engine builds and its unit tests pass against it
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: 'fedora:latest', deps: 'dnf install -y gcc make openssl-devel pkgconf-pkg-config' }
+          - { image: 'archlinux:latest', deps: 'pacman -Syu --noconfirm base-devel openssl' }
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - run: ${{ matrix.deps }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: openssl version
+      - run: make re && make test
+      - name: transparent mode is built in
+        run: |
+          ./dpi-proxy --capabilities | grep -q '^transparent_mode: supported'
 
   shellcheck:
     # the installer, uninstaller, CLI and release/install test scripts

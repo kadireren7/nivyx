@@ -1087,7 +1087,7 @@ update_cmd() {
 	# no absolute or ".." paths
 	# (no pipes into grep -q: with pipefail, the writer's SIGPIPE when grep
 	# stops at the first match would turn a match into a failure)
-	local listing names
+	local listing names caps
 	listing="$(tar -tvzf "$work/$asset")" && names="$(tar -tzf "$work/$asset")" \
 		|| { err "could not read the download"; exit 1; }
 	if grep -q '^[lh]' <<<"$listing" \
@@ -1100,8 +1100,13 @@ update_cmd() {
 	local pkg="$work/nivyx-linux-$arch"
 	[ -f "$pkg/dpi-proxy" ] && [ -x "$pkg/dpi-proxy" ] && [ -f "$pkg/nivyx" ] \
 		|| { err "unexpected package layout; nothing was installed"; exit 1; }
-	"$pkg/dpi-proxy" --capabilities 2>/dev/null | grep -q '^transparent_mode: supported' \
-		|| { err "the downloaded engine does not run here; nothing was installed"; exit 1; }
+	if ! caps="$("$pkg/dpi-proxy" --capabilities 2>&1)" || ! grep -q '^transparent_mode: supported' <<<"$caps"; then
+		err "the downloaded engine does not run here; nothing was installed"
+		err "  ($(head -n 1 <<<"$caps"))"
+		err "  the release package needs glibc 2.35+ and OpenSSL 3 (libssl.so.3); on other systems"
+		err "  (e.g. OpenSSL 4 on Fedora and Arch) update from source: git pull && sudo ./scripts/install.sh"
+		exit 1
+	fi
 	[ "$("$pkg/dpi-proxy" --version 2>/dev/null | sed -n 's/^dpi-proxy //p')" = "$latest" ] \
 		|| { err "the downloaded engine is not version $latest; nothing was installed"; exit 1; }
 
