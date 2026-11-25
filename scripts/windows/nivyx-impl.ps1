@@ -92,7 +92,14 @@ function Show-StatusShort {
         return
     }
     $engine = Field engine
-    if ($engine -eq 'running') { WriteColor 'Protection: Active' Green } else { WriteColor 'Protection: Starting' Yellow }
+    # the file only counts if the running service process wrote it, and
+    # recently (the engine rewrites it every 10 s)
+    $svcPid = (Get-CimInstance Win32_Service -Filter "Name='$Service'" -ErrorAction SilentlyContinue).ProcessId
+    if ($svcPid -and (Field pid) -ne "$svcPid") { $engine = 'previous-process' }
+    $age = 0; $upd = Field updated
+    if ($upd -match '^\d+$') { $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$upd }
+    if ($engine -eq 'running' -and $age -gt 45) { WriteColor "Protection: Degraded (engine not responding: last heartbeat ${age}s ago)" Red }
+    elseif ($engine -eq 'running') { WriteColor 'Protection: Active' Green } else { WriteColor 'Protection: Starting' Yellow }
     $fails = Field dns_failures
     switch (Field dns_intercept) {
         'doh' {
@@ -557,6 +564,13 @@ function Invoke-Update([bool]$checkOnly) {
         foreach ($u in $asset.browser_download_url, $sums.browser_download_url) {
             if (-not $u.StartsWith($official)) { Write-Host 'nivyx: refusing a download URL outside the official repository'; exit 1 }
         }
+    } else {
+        # a test override may only point at this machine
+        foreach ($u in $api, $asset.browser_download_url, $sums.browser_download_url) {
+            if ($u -notmatch '^https?://(127\.0\.0\.1|localhost)(:\d+)?/') {
+                Write-Host "nivyx: NIVYX_RELEASE_API is for the test suite and must point at this machine (http://127.0.0.1:PORT/...); refusing $u"; exit 1
+            }
+        }
     }
 
     $work = Join-Path $env:TEMP ("nivyx-update-" + [guid]::NewGuid().ToString('N'))
@@ -607,10 +621,10 @@ function Invoke-Update([bool]$checkOnly) {
         }
 
         # back up what changes, then swap with the service stopped
-        $bak = Join-Path $DataDir 'rollback'
-        if (Test-Path $bak) { Remove-Item $bak -Recurse -Force }
+        # unique per update: a second update never mixes its files with this one's
+        $bak = Join-Path $DataDir ('update-rollback-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $bak | Out-Null
-        $files = 'dpi-proxy.exe', 'nivyx-impl.ps1', 'uninstall.ps1', 'nivyx-completion.ps1'
+        $files = 'dpi-proxy.exe', 'nivyx-impl.ps1', 'uninstall.ps1', 'nivyx-completion.ps1', 'Uninstall Nivyx.cmd'
         foreach ($f in $files + 'WinDivert.dll', 'WinDivert64.sys') {
             $p = Join-Path $InstDir $f
             if (Test-Path $p) { Copy-Item $p $bak -Force }
@@ -632,21 +646,21 @@ function Invoke-Update([bool]$checkOnly) {
                     Copy-Item $np $op -Force -ErrorAction Stop
                 }
             }
+            Start-Service $Service
+        } catch { $copyOk = $false; Write-Host "nivyx: install step failed: $($_.Exception.Message)" }
+
+        if ($copyOk -and (Test-UpdateHealthy)) {
             # nivyx.cmd is read by cmd.exe while it runs: replace it only
-            # after this process has exited
+            # after this process has exited (and only once the update is kept)
             $newCmd = Join-Path $pkg 'nivyx.cmd'; $curCmd = Join-Path $InstDir 'nivyx.cmd'
             if ((Test-Path $newCmd) -and (Get-Sha256 $newCmd) -ne (Get-Sha256 $curCmd)) {
                 $staged = Join-Path $InstDir 'nivyx.cmd.new'
                 Copy-Item $newCmd $staged -Force
                 Start-Process -WindowStyle Hidden cmd.exe "/c timeout /t 3 >nul & move /y `"$staged`" `"$curCmd`" >nul"
             }
-            Start-Service $Service
-        } catch { $copyOk = $false; Write-Host "nivyx: install step failed: $($_.Exception.Message)" }
-
-        if ($copyOk -and (Test-UpdateHealthy)) {
+            Remove-Item $bak -Recurse -Force -ErrorAction SilentlyContinue
             Write-Host 'Health check passed.'
             Write-Host "Nivyx updated to $latest. Configuration and learned state were kept."
-            Remove-Item $bak -Recurse -Force -ErrorAction SilentlyContinue
             return
         }
         Write-Host "nivyx: the new version failed its health check; restoring $current"
@@ -655,9 +669,13 @@ function Invoke-Update([bool]$checkOnly) {
         Start-Sleep -Seconds 1
         foreach ($f in Get-ChildItem $bak -File) { Copy-Item $f.FullName (Join-Path $InstDir $f.Name) -Force }
         Start-Service $Service -ErrorAction SilentlyContinue
-        if (Test-UpdateHealthy) { Write-Host "nivyx: rolled back; Nivyx $current is running again" }
-        else { Write-Host 'nivyx: rollback finished but the service is still unhealthy: run nivyx repair' }
-        Remove-Item $bak -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-UpdateHealthy) {
+            Remove-Item $bak -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "nivyx: rolled back; Nivyx $current is running again"
+        } else {
+            Write-Host 'nivyx: rollback finished but the service is still unhealthy: run nivyx repair'
+            Write-Host "nivyx: the previous files are kept in $bak"
+        }
         exit 1
     } finally {
         Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue

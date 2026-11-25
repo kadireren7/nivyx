@@ -139,7 +139,7 @@ version_string() {
 
 # Compact, human-first summary (the default). Full internals: --verbose.
 status_short() {
-	local ver svc engine table protection dns_state fails bypassed
+	local ver svc engine table protection="" dns_state fails bypassed
 	ver="$(version_string)"
 	echo "${C_CYAN}Nivyx ${ver:-(version unknown — engine not found)}${C_RESET}"
 
@@ -160,7 +160,22 @@ status_short() {
 	fi
 
 	engine="$(status_field engine)"
-	if [ "$(id -u)" -eq 0 ]; then
+	# The file only counts if the running service process wrote it, and
+	# recently: the engine rewrites it every 10 s (heartbeat).
+	local mainpid updated age=0
+	mainpid="$(systemctl show -p MainPID --value "$TP_SERVICE" 2>/dev/null || true)"
+	if [ -n "$mainpid" ] && [ "$mainpid" != 0 ] && [ "$(status_field pid)" != "$mainpid" ]; then
+		engine="previous-process"
+	fi
+	updated="$(status_field updated)"
+	[[ "$updated" =~ ^[0-9]+$ ]] && age=$(( $(date +%s) - updated ))
+	if [ "$engine" = running ] && [ "$age" -gt 45 ]; then
+		echo "Protection: ${C_RED}Degraded (engine not responding: last heartbeat ${age}s ago)${C_RESET}"
+		engine="stale"
+	fi
+	if [ "$engine" = stale ]; then
+		:
+	elif [ "$(id -u)" -eq 0 ]; then
 		table="absent"
 		nft list table inet "$TP_TABLE" >/dev/null 2>&1 && table="present"
 		if [ "$engine" = running ] && [ "$table" = present ]; then
@@ -175,7 +190,8 @@ status_short() {
 	else
 		protection="Starting"
 	fi
-	case "$protection" in
+	case "${protection:-}" in
+	"") ;;
 	Active) echo "Protection: ${C_GREEN}$protection${C_RESET}" ;;
 	Starting) echo "Protection: ${C_YELLOW}$protection${C_RESET}" ;;
 	*) echo "Protection: ${C_RED}$protection${C_RESET}" ;;
@@ -854,6 +870,7 @@ repair() {
 		exit 1
 	fi
 	need_systemctl
+	take_admin_lock
 	# an install from before v2.3 moves to the nivyx names first, then
 	# the checks below run again against the new layout
 	if [ "$LAYOUT" = old ] && [ "${NIVYX_REPAIR_MIGRATED:-0}" != 1 ]; then
@@ -978,6 +995,25 @@ repair() {
 RELEASE_API="${NIVYX_RELEASE_API:-https://api.github.com/repos/kadireren7/nivyx/releases/latest}"
 OFFICIAL_PREFIX="https://github.com/kadireren7/nivyx/releases/download/"
 
+# A test override may only point at this machine: an update source
+# outside the official repository is never used for real traffic.
+is_loopback_url() {
+	case "$1" in
+	http://127.0.0.1:* | http://127.0.0.1/* | http://localhost:* | http://localhost/* | \
+		https://127.0.0.1:* | https://127.0.0.1/* | https://localhost:* | https://localhost/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# One install/update/repair/uninstall at a time (the installer and the
+# uninstaller take the same lock).
+ADMIN_LOCK=/run/nivyx-admin.lock
+take_admin_lock() {
+	have flock || return 0
+	exec 9>"$ADMIN_LOCK"
+	flock -n 9 || { err "another Nivyx install, update, repair or uninstall is running; try again when it has finished"; exit 1; }
+}
+
 # True if $1 is strictly newer than $2 (plain x.y.z comparison).
 ver_gt() {
 	[ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
@@ -1027,7 +1063,11 @@ update_cmd() {
 		"$OFFICIAL_PREFIX"*"$OFFICIAL_PREFIX"*) ;;
 		*) err "refusing a download URL outside the official repository"; exit 1 ;;
 		esac
+	elif ! is_loopback_url "$RELEASE_API" || ! is_loopback_url "$url" || ! is_loopback_url "$sums_url"; then
+		err "NIVYX_RELEASE_API is for the test suite and must point at this machine (http://127.0.0.1:PORT/...); refusing $RELEASE_API"
+		exit 1
 	fi
+	take_admin_lock
 
 	work="$(mktemp -d /var/tmp/nivyx-update.XXXXXX)"
 	trap 'rm -rf "${work:-}"' EXIT
@@ -1043,61 +1083,96 @@ update_cmd() {
 	fi
 	echo "SHA-256 verified."
 
-	tar -xzf "$work/$asset" -C "$work" || { err "could not unpack the download"; exit 1; }
+	# only plain files and folders inside nivyx-linux-<arch>/: no links,
+	# no absolute or ".." paths
+	# (no pipes into grep -q: with pipefail, the writer's SIGPIPE when grep
+	# stops at the first match would turn a match into a failure)
+	local listing names
+	listing="$(tar -tvzf "$work/$asset")" && names="$(tar -tzf "$work/$asset")" \
+		|| { err "could not read the download"; exit 1; }
+	if grep -q '^[lh]' <<<"$listing" \
+		|| grep -qvE "^nivyx-linux-$arch(/|\$)" <<<"$names" \
+		|| grep -qE '(^|/)\.\.(/|$)' <<<"$names"; then
+		err "the package contains unexpected paths or links; nothing was installed"
+		exit 1
+	fi
+	tar --no-same-owner -xzf "$work/$asset" -C "$work" || { err "could not unpack the download"; exit 1; }
 	local pkg="$work/nivyx-linux-$arch"
-	[ -x "$pkg/dpi-proxy" ] && [ -f "$pkg/nivyx" ] || { err "unexpected package layout; nothing was installed"; exit 1; }
+	[ -f "$pkg/dpi-proxy" ] && [ -x "$pkg/dpi-proxy" ] && [ -f "$pkg/nivyx" ] \
+		|| { err "unexpected package layout; nothing was installed"; exit 1; }
 	"$pkg/dpi-proxy" --capabilities 2>/dev/null | grep -q '^transparent_mode: supported' \
 		|| { err "the downloaded engine does not run here; nothing was installed"; exit 1; }
 	[ "$("$pkg/dpi-proxy" --version 2>/dev/null | sed -n 's/^dpi-proxy //p')" = "$latest" ] \
 		|| { err "the downloaded engine is not version $latest; nothing was installed"; exit 1; }
 
-	# stage next to the targets (same filesystem) so the swap is a rename
-	bak="/var/lib/$NAME_DIR/rollback"
-	mkdir -p "$bak"
-	cp -p "$ENGINE_BIN" "$bak/dpi-proxy"
-	cp -p /usr/local/bin/nivyx "$bak/nivyx"
-	install -m 0755 "$pkg/dpi-proxy" /usr/local/bin/.engine.new
-	install -m 0755 "$pkg/nivyx" /usr/local/bin/.nivyx.new
-	command -v strip >/dev/null 2>&1 && strip /usr/local/bin/.engine.new 2>/dev/null || true
-	mv -f /usr/local/bin/.engine.new "$ENGINE_BIN"
-	mv -f /usr/local/bin/.nivyx.new /usr/local/bin/nivyx
-	# man page and completions (best effort; same places the installer uses)
+	# Every file the update replaces is backed up first (unique names: a
+	# second update can never mix its files with this one's); the new
+	# engine and CLI are staged next to their targets so the swap is a
+	# rename.
+	local targets="$ENGINE_BIN /usr/local/bin/nivyx /usr/local/share/man/man1/nivyx.1
+/usr/share/bash-completion/completions/nivyx /usr/local/share/zsh/site-functions/_nivyx
+/usr/share/fish/vendor_completions.d/nivyx.fish" t new_eng new_cli
+	mkdir -p "/var/lib/$NAME_DIR"
+	bak="$(mktemp -d "/var/lib/$NAME_DIR/update-rollback.XXXXXX")"
+	: >"$bak/absent"
+	for t in $targets; do
+		if [ -e "$t" ]; then
+			mkdir -p "$bak/files$(dirname "$t")" && cp -p "$t" "$bak/files$t" \
+				|| { err "cannot back up $t (disk full?); nothing was installed"; rm -rf "$bak"; exit 1; }
+		else
+			printf '%s\n' "$t" >>"$bak/absent"
+		fi
+	done
+	# staged next to the targets, so the swap is a rename; a failure here
+	# (disk full, ...) leaves the installed files as they were
+	new_eng="$(mktemp /usr/local/bin/.nivyx-engine.XXXXXX)" && new_cli="$(mktemp /usr/local/bin/.nivyx.XXXXXX)" \
+		&& install -m 0755 "$pkg/dpi-proxy" "$new_eng" && install -m 0755 "$pkg/nivyx" "$new_cli" \
+		|| { err "cannot stage the new files (disk full?); nothing was installed"; rm -f "${new_eng:-}" "${new_cli:-}"; rm -rf "$bak"; exit 1; }
+	command -v strip >/dev/null 2>&1 && strip "$new_eng" 2>/dev/null || true
+	mv -f "$new_eng" "$ENGINE_BIN"
+	mv -f "$new_cli" /usr/local/bin/nivyx
+	# man page and completions (same places the installer uses)
 	if [ -f "$pkg/nivyx.1" ]; then
-		install -d /usr/local/share/man/man1 && install -m 0644 "$pkg/nivyx.1" /usr/local/share/man/man1/nivyx.1 || true
+		install -d /usr/local/share/man/man1 && install -m 0644 "$pkg/nivyx.1" /usr/local/share/man/man1/nivyx.1 || rc=1
 	fi
 	if [ -d "$pkg/completions" ]; then
-		install -D -m 0644 "$pkg/completions/nivyx.bash" /usr/share/bash-completion/completions/nivyx 2>/dev/null || true
-		install -D -m 0644 "$pkg/completions/_nivyx" /usr/local/share/zsh/site-functions/_nivyx 2>/dev/null || true
-		install -D -m 0644 "$pkg/completions/nivyx.fish" /usr/share/fish/vendor_completions.d/nivyx.fish 2>/dev/null || true
+		install -D -m 0644 "$pkg/completions/nivyx.bash" /usr/share/bash-completion/completions/nivyx || rc=1
+		install -D -m 0644 "$pkg/completions/_nivyx" /usr/local/share/zsh/site-functions/_nivyx || rc=1
+		install -D -m 0644 "$pkg/completions/nivyx.fish" /usr/share/fish/vendor_completions.d/nivyx.fish || rc=1
 	fi
 	echo "Installed $latest; restarting the service ..."
-	systemctl restart "$TP_SERVICE" || rc=1
+	[ "$rc" = 0 ] && { systemctl restart "$TP_SERVICE" || rc=1; }
 
 	if [ "$rc" = 0 ] && update_healthy; then
-		echo "Health check passed."
-		echo "Nivyx updated to $latest. Configuration and learned state were kept."
 		rm -rf "$bak"
 		# installs from before v2.3 move to the nivyx names; if that does
 		# not work out they stay exactly as they were (and keep running)
 		if [ "$LAYOUT" = old ]; then
 			migrate_layout || echo "note: the move to the new service names was not applied; Nivyx keeps running as before ($SELF repair retries it)"
 		fi
+		echo "Health check passed."
+		echo "Nivyx updated to $latest. Configuration and learned state were kept."
 		return 0
 	fi
 	err "the new version failed its health check; restoring ${current:-the previous version}"
-	mv -f "$bak/dpi-proxy" "$ENGINE_BIN"
-	mv -f "$bak/nivyx" /usr/local/bin/nivyx
+	for t in $targets; do
+		if [ -e "$bak/files$t" ]; then
+			cp -p "$bak/files$t" "$t.rollback" && mv -f "$t.rollback" "$t"
+		elif grep -qxF "$t" "$bak/absent"; then
+			rm -f "$t"
+		fi
+	done
 	systemctl reset-failed "$TP_SERVICE" 2>/dev/null || true
 	systemctl restart "$TP_SERVICE" || true
 	if update_healthy; then
+		rm -rf "$bak"
 		err "rolled back; Nivyx ${current:-previous} is running again"
 	else
 		err "rollback finished but the service is still unhealthy: sudo $SELF repair"
+		err "the previous files are kept in $bak"
 	fi
-	rm -rf "$bak"
 	exit 1
 }
-
 
 # ---- migrate (installs from before v2.3) --------------------------------
 #

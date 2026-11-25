@@ -91,7 +91,12 @@ status_short() {
 		echo "Failures: 0"
 		return 0
 	fi
-	if [ "$(field engine)" = running ] && [ "$(field pf)" = enabled ]; then
+	# the engine rewrites the file every 10 s (heartbeat)
+	updated="$(field updated)"; age=0
+	case "$updated" in '' | *[!0-9]*) ;; *) age=$(( $(date +%s) - updated )) ;; esac
+	if [ "$(field engine)" = running ] && [ "$age" -gt 45 ]; then
+		echo "Protection: ${C_RED}Degraded (engine not responding: last heartbeat ${age}s ago)${C_RESET}"
+	elif [ "$(field engine)" = running ] && [ "$(field pf)" = enabled ]; then
 		echo "Protection: ${C_GREEN}Active${C_RESET}"
 	elif [ "$(field engine)" = running ]; then
 		echo "Protection: ${C_YELLOW}Degraded ($(field pf))${C_RESET}"
@@ -849,6 +854,32 @@ do_repair() {
 RELEASE_API="${NIVYX_RELEASE_API:-https://api.github.com/repos/kadireren7/nivyx/releases/latest}"
 OFFICIAL_PREFIX="https://github.com/kadireren7/nivyx/releases/download/"
 
+# A test override may only point at this machine: an update source
+# outside the official repository is never used for real traffic.
+is_loopback_url() {
+	case "$1" in
+	http://127.0.0.1:* | http://127.0.0.1/* | http://localhost:* | http://localhost/* | \
+		https://127.0.0.1:* | https://127.0.0.1/* | https://localhost:* | https://localhost/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# One update/repair at a time (macOS has no flock(1): a lock directory
+# holding the owner's pid; a lock whose owner is gone is taken over).
+ADMIN_LOCK=/var/run/nivyx-admin.lock
+take_admin_lock() {
+	if ! mkdir "$ADMIN_LOCK" 2>/dev/null; then
+		owner="$(cat "$ADMIN_LOCK/pid" 2>/dev/null || true)"
+		if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+			err "another Nivyx update or repair is running (pid $owner); try again when it has finished"
+			exit 1
+		fi
+		rm -rf "$ADMIN_LOCK"
+		mkdir "$ADMIN_LOCK" 2>/dev/null || { err "could not take $ADMIN_LOCK"; exit 1; }
+	fi
+	echo $$ >"$ADMIN_LOCK/pid"
+}
+
 # True if $1 is strictly newer than $2 (numeric x.y.z comparison).
 ver_gt() {
 	awk -v a="$1" -v b="$2" 'BEGIN {
@@ -903,10 +934,14 @@ do_update() {
 	if [ -z "${NIVYX_RELEASE_API:-}" ]; then
 		case "$url" in "$OFFICIAL_PREFIX"*) ;; *) err "refusing a download URL outside the official repository"; exit 1 ;; esac
 		case "$sums_url" in "$OFFICIAL_PREFIX"*) ;; *) err "refusing a download URL outside the official repository"; exit 1 ;; esac
+	elif ! is_loopback_url "$RELEASE_API" || ! is_loopback_url "$url" || ! is_loopback_url "$sums_url"; then
+		err "NIVYX_RELEASE_API is for the test suite and must point at this machine (http://127.0.0.1:PORT/...); refusing $RELEASE_API"
+		exit 1
 	fi
 
+	take_admin_lock
 	work="$(mktemp -d /private/var/tmp/nivyx-update.XXXXXX)"
-	trap 'rm -rf "$work"' EXIT
+	trap 'rm -rf "$work" "$ADMIN_LOCK"' EXIT
 	echo "Downloading $asset ..."
 	curl -fsSL --max-time 300 -o "$work/$asset" "$url" || { err "download failed"; exit 1; }
 	curl -fsSL --max-time 60 -o "$work/SHA256SUMS" "$sums_url" || { err "could not download SHA256SUMS"; exit 1; }
@@ -918,6 +953,16 @@ do_update() {
 	fi
 	echo "SHA-256 verified."
 
+	# only plain files and folders inside nivyx-macos-<arch>/: no links,
+	# no absolute or ".." paths
+	names="$(zipinfo -1 "$work/$asset" 2>/dev/null)" && modes="$(zipinfo -s "$work/$asset" 2>/dev/null)" \
+		|| { err "could not read the download"; exit 1; }
+	if printf '%s\n' "$modes" | grep -q '^l' \
+		|| printf '%s\n' "$names" | grep -vE "^nivyx-macos-$arch(/|\$)" | grep -q . \
+		|| printf '%s\n' "$names" | grep -E '(^|/)\.\.(/|$)' | grep -q .; then
+		err "the package contains unexpected paths or links; nothing was installed"
+		exit 1
+	fi
 	ditto -x -k "$work/$asset" "$work" || { err "could not unpack the download"; exit 1; }
 	pkg="$work/nivyx-macos-$arch"
 	[ -x "$pkg/dpi-proxy" ] && [ -f "$pkg/nivyx" ] || { err "unexpected package layout; nothing was installed"; exit 1; }
@@ -926,31 +971,58 @@ do_update() {
 	[ "$("$pkg/dpi-proxy" --version 2>/dev/null | sed -n 's/^dpi-proxy //p')" = "$latest" ] \
 		|| { err "the downloaded engine is not version $latest; nothing was installed"; exit 1; }
 
-	bak="/usr/local/var/dpi-proxy/rollback"
-	mkdir -p "$bak"
-	cp -p /usr/local/bin/dpi-proxy "$bak/dpi-proxy"
-	cp -p /usr/local/bin/nivyx "$bak/nivyx"
-	install -m 755 -o root -g wheel "$pkg/dpi-proxy" /usr/local/bin/.dpi-proxy.new
-	install -m 755 -o root -g wheel "$pkg/nivyx" /usr/local/bin/.nivyx.new
-	mv -f /usr/local/bin/.dpi-proxy.new /usr/local/bin/dpi-proxy
-	mv -f /usr/local/bin/.nivyx.new /usr/local/bin/nivyx
-	[ -f "$pkg/nivyx.1" ] && install -d /usr/local/share/man/man1 && install -m 644 "$pkg/nivyx.1" /usr/local/share/man/man1/nivyx.1
-	echo "Installed $latest; restarting the service ..."
+	# every file the update replaces is backed up first, under a unique name
+	targets="/usr/local/bin/dpi-proxy /usr/local/bin/nivyx /usr/local/share/man/man1/nivyx.1 /usr/local/share/zsh/site-functions/_nivyx"
+	mkdir -p /usr/local/var/dpi-proxy
+	bak="$(mktemp -d /usr/local/var/dpi-proxy/update-rollback.XXXXXX)" || { err "cannot create a backup folder; nothing was installed"; exit 1; }
+	: >"$bak/absent"
+	for t in $targets; do
+		if [ -e "$t" ]; then
+			mkdir -p "$bak/files$(dirname "$t")" && cp -p "$t" "$bak/files$t" \
+				|| { err "cannot back up $t (disk full?); nothing was installed"; rm -rf "$bak"; exit 1; }
+		else
+			printf '%s\n' "$t" >>"$bak/absent"
+		fi
+	done
+	# staged next to the targets, so the swap is a rename; a failure here
+	# (disk full, ...) leaves the installed files as they were
+	new_eng="$(mktemp /usr/local/bin/.dpi-proxy.XXXXXX)" && new_cli="$(mktemp /usr/local/bin/.nivyx.XXXXXX)" \
+		&& install -m 755 -o root -g wheel "$pkg/dpi-proxy" "$new_eng" \
+		&& install -m 755 -o root -g wheel "$pkg/nivyx" "$new_cli" \
+		|| { err "cannot stage the new files (disk full?); nothing was installed"; rm -f "${new_eng:-}" "${new_cli:-}"; rm -rf "$bak"; exit 1; }
+	mv -f "$new_eng" /usr/local/bin/dpi-proxy
+	mv -f "$new_cli" /usr/local/bin/nivyx
 	rc=0
-	launchctl kickstart -k "system/$LABEL" || rc=1
+	if [ -f "$pkg/nivyx.1" ]; then
+		install -d /usr/local/share/man/man1 && install -m 644 "$pkg/nivyx.1" /usr/local/share/man/man1/nivyx.1 || rc=1
+	fi
+	if [ -f "$pkg/_nivyx" ]; then
+		install -d /usr/local/share/zsh/site-functions && install -m 644 "$pkg/_nivyx" /usr/local/share/zsh/site-functions/_nivyx || rc=1
+	fi
+	echo "Installed $latest; restarting the service ..."
+	[ "$rc" = 0 ] && { launchctl kickstart -k "system/$LABEL" || rc=1; }
 	if [ "$rc" = 0 ] && update_healthy; then
+		rm -rf "$bak"
 		echo "Health check passed."
 		echo "Nivyx updated to $latest. Configuration and learned state were kept."
-		rm -rf "$bak"
 		return 0
 	fi
 	err "the new version failed its health check; restoring ${current:-the previous version}"
-	mv -f "$bak/dpi-proxy" /usr/local/bin/dpi-proxy
-	mv -f "$bak/nivyx" /usr/local/bin/nivyx
+	for t in $targets; do
+		if [ -e "$bak/files$t" ]; then
+			cp -p "$bak/files$t" "$t.rollback" && mv -f "$t.rollback" "$t"
+		elif grep -qxF "$t" "$bak/absent"; then
+			rm -f "$t"
+		fi
+	done
 	launchctl kickstart -k "system/$LABEL" || true
-	if update_healthy; then err "rolled back; Nivyx ${current:-previous} is running again"
-	else err "rollback finished but the service is still unhealthy: sudo $SELF repair"; fi
-	rm -rf "$bak"
+	if update_healthy; then
+		rm -rf "$bak"
+		err "rolled back; Nivyx ${current:-previous} is running again"
+	else
+		err "rollback finished but the service is still unhealthy: sudo $SELF repair"
+		err "the previous files are kept in $bak"
+	fi
 	exit 1
 }
 

@@ -76,6 +76,31 @@ assert_migrated() {
 	nivyx doctor || die "doctor failed after the move"
 }
 
+# v2.3 and later already use the nivyx names: only the updater path is
+# checked (nothing to migrate)
+case "$OLD_TAG" in
+v2.[3-9]* | v[3-9]*)
+	stepn "$OLD_TAG installed, its own updater installs the new package"
+	sudo "$old/scripts/install.sh" || die "$OLD_TAG install.sh failed"
+	active nivyx || die "$OLD_TAG service not active"
+	printf '\n[domains]\nexample.com = tlsrec\n' | sudo tee -a "$CONF" >/dev/null
+	sudo systemctl restart nivyx; sleep 3
+	conf_hash="$(sudo sha256sum "$CONF" | cut -d' ' -f1)"
+	sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" /usr/local/bin/nivyx update || die "the $OLD_TAG updater failed on the new package"
+	[ "$(nivyx version | awk '{print $2}')" = "$new_version" ] || die "version after the old updater: $(nivyx version)"
+	active nivyx || die "service down after the old updater"
+	[ "$(sudo sha256sum "$CONF" | cut -d' ' -f1)" = "$conf_hash" ] || die "the manual config changed"
+	nivyx strategy example.com | grep -q 'tlsrec (manual' || die "the manual rule no longer applies"
+	c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS after the old updater -> '$c'"
+	nivyx doctor || die "doctor failed after the update"
+	out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "repair failed"; }
+	echo "$out" | grep -q 'nothing else wrong' || { echo "$out"; die "repair found something wrong after the update"; }
+	sudo "$ROOT/scripts/uninstall.sh" --purge
+	pass "$OLD_TAG updater -> $new_version: config, rule, HTTPS, doctor and repair fine"
+	printf '\nUPDATE COMPAT %s -> %s: ALL CHECKS PASSED\n' "$OLD_TAG" "$tree_version"
+	exit 0 ;;
+esac
+
 stepn "$OLD_TAG installed, its own updater installs the new package"
 install_old
 old_cli_update
