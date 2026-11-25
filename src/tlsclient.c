@@ -4,6 +4,7 @@
 #include "relay.h"
 
 #include <openssl/err.h>
+#include <openssl/opensslv.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <stdlib.h>
@@ -189,8 +190,23 @@ t_tlsc	*tlsc_handshake(void *ctx, int fd, const char *host, int split,
 		return (NULL);
 	}
 	SSL_set_bio(t->ssl, t->rbio, t->wbio);
-	SSL_set_tlsext_host_name(t->ssl, host);
-	SSL_set1_host(t->ssl, host);
+	/* The name the certificate must match. Without it the verify result
+	 * below would accept a valid certificate for any name, so a failure
+	 * here (allocation) fails the handshake. OpenSSL 4.0 deprecates
+	 * SSL_set1_host() for SSL_set1_dnsname(); `host` is always a DNS
+	 * name here (DoH servers, SNI of intercepted flows). */
+#if OPENSSL_VERSION_MAJOR >= 4
+	if (SSL_set_tlsext_host_name(t->ssl, host) != 1
+		|| SSL_set1_dnsname(t->ssl, host) != 1)
+#else
+	if (SSL_set_tlsext_host_name(t->ssl, host) != 1
+		|| SSL_set1_host(t->ssl, host) != 1)
+#endif
+	{
+		ERR_clear_error();
+		tlsc_free(t);
+		return (NULL);
+	}
 	SSL_set_connect_state(t->ssl);
 	first = 1;
 	while ((rc = SSL_do_handshake(t->ssl)) != 1)
