@@ -35,12 +35,15 @@ run_one() { # name sanitizer-flags runtime-options
 	done
 	sudo grep -q '^engine: running' "$work/status" 2>/dev/null || die "$name: engine did not start"
 	for round in 1 2; do
+		# (wait only for these: a bare `wait` would also wait for the engine)
+		local load=""
 		for u in https://example.com/ https://www.wikipedia.org/ https://github.com/ https://www.cloudflare.com/; do
-			for _ in 1 2 3; do fetch "$u" >>"$work/codes" & done
+			for _ in 1 2 3; do fetch "$u" >>"$work/codes" & load="$load $!"; done
 		done
-		for _ in $(seq 1 10); do getent ahostsv4 "san-$RANDOM.example.org" >/dev/null 2>&1 & done
+		for _ in $(seq 1 10); do getent ahostsv4 "san-$RANDOM.example.org" >/dev/null 2>&1 & load="$load $!"; done
 		getent ahostsv4 example.net >/dev/null 2>&1 || fails=$((fails + 1))
-		wait
+		# shellcheck disable=SC2086
+		wait $load || true
 		# reload the manual rules mid-run
 		sudo kill -HUP "$(pgrep -f -n "^$ROOT/dpi-proxy --mode transparent")" 2>/dev/null || true
 		sleep 1
