@@ -12,9 +12,59 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+# include <windows.h>
+#endif
 
 #ifndef DPI_PROXY_VERSION
 # define DPI_PROXY_VERSION "0.0.0-dev"
+#endif
+
+#ifdef _WIN32
+/*
+ * dpi-proxy.exe is Nivyx's internal engine: the installed service runs
+ * it with --service. Double-clicked in Explorer (no arguments, a console
+ * window created just for it), the default SOCKS5 mode would leave a
+ * window with one line in it and no visible effect. In that one case
+ * explain what to run instead and wait for a key, so the window does not
+ * vanish. Started from a terminal, a script or with any option, the
+ * behaviour is unchanged.
+ */
+static int	launched_from_explorer(void)
+{
+	DWORD	pids[2];
+	HWND	win;
+	DWORD	mode;
+
+	if (GetConsoleProcessList(pids, 2) != 1)
+		return (0);
+	win = GetConsoleWindow();
+	if (win == NULL || !IsWindowVisible(win))
+		return (0);
+	return (GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode)
+		&& GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode));
+}
+
+static int	explain_engine_and_wait(void)
+{
+	printf("Nivyx %s - internal engine (dpi-proxy.exe)\n"
+		"\n"
+		"This file is not meant to be opened directly. It is the engine\n"
+		"that the Nivyx Windows service runs in the background.\n"
+		"\n"
+		"  To install Nivyx:  double-click \"Install Nivyx.cmd\"\n"
+		"                     in the folder you extracted from the ZIP.\n"
+		"  Already installed: open PowerShell and run  nivyx status\n"
+		"  To remove it:      double-click \"Uninstall Nivyx.cmd\".\n"
+		"\n"
+		"Nothing was started or changed.\n"
+		"(Advanced: run it from a terminal with options, see --help.)\n"
+		"\n"
+		"Press Enter to close this window.\n", DPI_PROXY_VERSION);
+	fflush(stdout);
+	(void)getchar();
+	return (2);
+}
 #endif
 
 static void	print_usage(const char *argv0)
@@ -135,6 +185,11 @@ int	main(int argc, char **argv)
 	}
 #endif
 
+#ifdef _WIN32
+	if (argc == 1 && launched_from_explorer())
+		return (explain_engine_and_wait());
+#endif
+
 	i = 1;
 	while (i < argc)
 	{
@@ -234,7 +289,20 @@ int	main(int argc, char **argv)
 # endif
 # ifdef _WIN32
 		if (tp_service)
+		{
 			rc = tp_windows_service_run(&opt);
+			if (rc < 0 && GetLastError()
+				== ERROR_FAILED_SERVICE_CONTROLLER_CONNECT)
+			{
+				fprintf(stderr, "--service: this is how the Windows "
+					"service manager starts the Nivyx engine; it cannot "
+					"be used from a terminal.\nInstall with \"Install "
+					"Nivyx.cmd\", then control it with: nivyx status | "
+					"start | stop\n");
+				platform_cleanup();
+				return (ERROR_FAILED_SERVICE_CONTROLLER_CONNECT);
+			}
+		}
 		else
 # endif
 			rc = run_transparent_server(&opt);
@@ -251,6 +319,12 @@ int	main(int argc, char **argv)
 	}
 
 	printf("dpi-proxy — general-purpose SOCKS5 proxy\n");
+#ifdef _WIN32
+	if (argc == 1)
+		fprintf(stderr, "note: plain SOCKS5 proxy only; this does not "
+			"protect the system by itself. For Nivyx's system-wide "
+			"mode run \"Install Nivyx.cmd\" (status: nivyx status).\n");
+#endif
 
 	rc = run_socks_server(host, port);
 	if (rc < 0 && host != NULL)

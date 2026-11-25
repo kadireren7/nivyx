@@ -16,6 +16,47 @@
 
 #include "windivert.h"
 
+/* transparent.c; declared here rather than through tpd.h, which pulls in
+ * headers whose include order matters next to <windows.h> */
+void	tpd_log(const char *fmt, ...);
+
+/* The reason WinDivertOpen failed, in words a user can act on (the
+ * generic "cannot install interception" line follows it). */
+static void	log_windivert_error(DWORD err)
+{
+	const char	*why;
+
+	switch (err)
+	{
+		case ERROR_FILE_NOT_FOUND:
+			why = "WinDivert64.sys was not found next to dpi-proxy.exe "
+				"(removed by antivirus? re-run Install Nivyx.cmd)";
+			break ;
+		case ERROR_ACCESS_DENIED:
+			why = "access denied (not running as Administrator/SYSTEM, "
+				"or blocked by security software)";
+			break ;
+		case ERROR_INVALID_IMAGE_HASH:
+			why = "Windows refused the driver signature (driver signature "
+				"enforcement, or the file is damaged)";
+			break ;
+		case ERROR_DRIVER_BLOCKED:
+			why = "the driver is blocked by Windows or security software "
+				"(e.g. the vulnerable driver blocklist / Memory integrity)";
+			break ;
+		case ERROR_SERVICE_DOES_NOT_EXIST:
+		case ERROR_SERVICE_MARKED_FOR_DELETE:
+			why = "the WinDivert driver service is being removed; reboot "
+				"and start Nivyx again";
+			break ;
+		default:
+			why = "see the error code";
+			break ;
+	}
+	tpd_log("WinDivert could not be opened: error %lu: %s",
+		(unsigned long)err, why);
+}
+
 /* ============================================================
  * Windows: WinDivert "reflection" (the technique of WinDivert's own
  * streamdump sample). An outbound packet of a new TCP/443 flow
@@ -519,7 +560,10 @@ int	tpp_install(int port, int ipv6, int dns_port)
 			port);
 	g_div = WinDivertOpen(filter, WINDIVERT_LAYER_NETWORK, 0, 0);
 	if (g_div == INVALID_HANDLE_VALUE)
+	{
+		log_windivert_error(GetLastError());
 		return (-1);
+	}
 	WinDivertSetParam(g_div, WINDIVERT_PARAM_QUEUE_LENGTH, 8192);
 	WinDivertSetParam(g_div, WINDIVERT_PARAM_QUEUE_TIME, 2000);
 	InterlockedExchange(&g_running, 1);
