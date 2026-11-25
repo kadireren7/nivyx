@@ -14,6 +14,8 @@
 #include <string.h>
 #ifdef _WIN32
 # include <windows.h>
+#elif defined(__APPLE__)
+# include <unistd.h>
 #endif
 
 #ifndef DPI_PROXY_VERSION
@@ -324,6 +326,15 @@ int	main(int argc, char **argv)
 		fprintf(stderr, "note: plain SOCKS5 proxy only; this does not "
 			"protect the system by itself. For Nivyx's system-wide "
 			"mode run \"Install Nivyx.cmd\" (status: nivyx status).\n");
+#elif defined(__APPLE__)
+	/* opened from Finder, this lands in a Terminal window: say what it is
+	 * (the SOCKS5 proxy itself starts as before) */
+	if (argc == 1 && isatty(STDERR_FILENO))
+		fprintf(stderr, "note: this is Nivyx's internal engine. Without "
+			"options it is only a plain SOCKS5 proxy and does not "
+			"protect the system.\nTo install Nivyx, double-click "
+			"\"Install Nivyx.command\"; if it is installed: nivyx "
+			"status. Press Ctrl-C to quit.\n");
 #endif
 
 	rc = run_socks_server(host, port);
