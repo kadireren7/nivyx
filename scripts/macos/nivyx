@@ -864,14 +864,14 @@ is_loopback_url() {
 	esac
 }
 
-# One update/repair at a time (macOS has no flock(1): a lock directory
+# One update at a time (macOS has no flock(1): a lock directory
 # holding the owner's pid; a lock whose owner is gone is taken over).
 ADMIN_LOCK=/var/run/nivyx-admin.lock
 take_admin_lock() {
 	if ! mkdir "$ADMIN_LOCK" 2>/dev/null; then
 		owner="$(cat "$ADMIN_LOCK/pid" 2>/dev/null || true)"
 		if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
-			err "another Nivyx update or repair is running (pid $owner); try again when it has finished"
+			err "another Nivyx update is running (pid $owner); try again when it has finished"
 			exit 1
 		fi
 		rm -rf "$ADMIN_LOCK"

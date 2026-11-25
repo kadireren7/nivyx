@@ -34,7 +34,7 @@ here (stated why).
 | U1 | P1 | Updaters (all 3): fixed rollback dir and staging names; backup deleted even when rollback failed; man page/completions not in rollback | 🟡 unique dirs, kept on failure, full file set |
 | U2 | P2 | `NIVYX_RELEASE_API` accepts any URL | ✅ (Linux, local) 🟡 (macOS/Windows): only 127.0.0.1/localhost |
 | U3 | P2 | Linux/macOS updater extracts without checking members | ✅ links, `..`, foreign top folders refused (tested locally with crafted archives) |
-| U4 | P2 | No lock: concurrent install/update/repair/uninstall | 🟡 Linux `flock`, macOS lock dir (update/repair) |
+| U4 | P2 | No lock: concurrent install/update/repair/uninstall | 🟡 Linux `flock` (install, update, repair, uninstall); macOS lock dir (update only) |
 | D1 | P2 | `status` "Active" from a stale status file / hung engine (Linux checked no PID; no platform checked the heartbeat) | ✅ Linux logic tested locally with stubs; 🟡 macOS/Windows |
 | S1 | P2 | SBOM: Windows OpenSSL `NOASSERTION`, Nivyx license `NOASSERTION`, Linux runtime OpenSSL missing | ✅ version read from the shipped exe (3.6.4 in v2.3.0) |
 | S2 | P3 | No updater-checked signature (SHA256SUMS comes from the same release) | ⛔ needs a project signing key; documented in docs/security.md |
