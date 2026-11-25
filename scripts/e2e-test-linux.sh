@@ -25,10 +25,57 @@ wait_status() { sleep 11; }	# status is rewritten every 10 s
 fetch() { curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$1" 2>&1 || true; }
 ok() { [[ "$1" =~ ^[23][0-9][0-9]$ ]]; }
 
+# A copy of this tree broken on purpose, for the failure tests: "build"
+# does not compile, "start" installs a unit that cannot start.
+broken_tree() {
+	local dst
+	dst="$(mktemp -d)"
+	tar --exclude=.git -C "$ROOT" -cf - . | tar -C "$dst" -xf -
+	case "$1" in
+	build) printf '\n#error injected by the test suite\n' >>"$dst/src/main.c" ;;
+	start) sed -i 's#^\[Service\]$#[Service]\nExecStartPre=/bin/false#' "$dst/systemd/nivyx.service" ;;
+	esac
+	printf '%s\n' "$dst"
+}
+sha() { sudo sha256sum "$1" | cut -d' ' -f1; }
+
 stepn install
 sudo "$ROOT/scripts/install.sh" || die "install.sh failed"
 systemctl is-active --quiet nivyx || die "service not active"
 pass "installed; installer health check (DNS + HTTPS through it) passed"
+
+stepn "a failed build leaves the running install alone"
+pid0="$(systemctl show -p MainPID --value nivyx)"
+eng0="$(sha /usr/local/bin/nivyx-engine)"
+t="$(broken_tree build)"
+rc=0; out="$(sudo "$t/scripts/install.sh" 2>&1)" || rc=$?
+rm -rf "$t"
+[ "$rc" = 3 ] || { echo "$out"; die "install.sh with a broken build exited $rc (expected 3)"; }
+echo "$out" | grep -q 'existing Nivyx installation is untouched' || die "no 'untouched' message"
+[ "$(systemctl show -p MainPID --value nivyx)" = "$pid0" ] || die "the running service was stopped or restarted by a failed build"
+sudo nft list table inet dpi_proxy_tp >/dev/null 2>&1 || die "the interception table was removed by a failed build"
+[ "$(sha /usr/local/bin/nivyx-engine)" = "$eng0" ] || die "the installed engine was replaced by a failed build"
+c="$(fetch https://example.com/)"; ok "$c" || die "after a failed build -> '$c'"
+pass "exit 3; same engine process ($pid0), table and binary; HTTPS $c"
+
+stepn "a reinstall that fails its health check restores the previous install"
+unit0="$(sha /etc/systemd/system/nivyx.service)"
+cli0="$(sha /usr/local/bin/nivyx)"
+conf0="$(sha /etc/nivyx/strategy.conf)"
+t="$(broken_tree start)"
+rc=0; out="$(sudo "$t/scripts/install.sh" 2>&1)" || rc=$?
+rm -rf "$t"
+[ "$rc" = 4 ] || { echo "$out"; die "install.sh with a unit that cannot start exited $rc (expected 4)"; }
+echo "$out" | grep -q 'previous state restored' || { echo "$out"; die "no rollback message"; }
+systemctl is-active --quiet nivyx || die "the previous service is not running again"
+[ "$(sha /etc/systemd/system/nivyx.service)" = "$unit0" ] || die "the previous unit was not restored"
+[ "$(sha /usr/local/bin/nivyx-engine)" = "$eng0" ] || die "the previous engine was not restored"
+[ "$(sha /usr/local/bin/nivyx)" = "$cli0" ] || die "the previous CLI was not restored"
+[ "$(sha /etc/nivyx/strategy.conf)" = "$conf0" ] || die "the config changed"
+ls -d /var/tmp/nivyx-install-backup.* >/dev/null 2>&1 && die "a successful rollback left its backup behind"
+for _ in $(seq 1 30); do grep -q '^engine: running' "$STATUS" 2>/dev/null && break; sleep 0.5; done
+c="$(fetch https://example.com/)"; ok "$c" || die "after the rollback -> '$c'"
+pass "exit 4; unit, engine, CLI and config restored; service running; HTTPS $c"
 
 stepn "normal HTTPS works and is intercepted"
 for u in https://example.com/ https://www.wikipedia.org/ https://github.com/; do
@@ -345,10 +392,27 @@ curl -sS -o /dev/null --max-time 60 \
 	'https://speed.cloudflare.com/__down?bytes=50000000' || true
 pass "measured"
 
-stepn "uninstall cleans only our own state"
+stepn "plain uninstall keeps settings and learned state; reinstall picks them up"
+printf '\n[domains]\ne2e-keep.example = tlsrec\n' | sudo tee -a /etc/nivyx/strategy.conf >/dev/null
+conf1="$(sha /etc/nivyx/strategy.conf)"
+sudo "$ROOT/scripts/uninstall.sh" || die "uninstall.sh failed"
+systemctl list-unit-files | grep -q 'nivyx.service' && die "unit still present"
+sudo nft list table inet dpi_proxy_tp >/dev/null 2>&1 && die "table still present"
+[ -e /usr/local/bin/nivyx-engine ] && die "engine still present"
+[ "$(sha /etc/nivyx/strategy.conf)" = "$conf1" ] || die "plain uninstall changed or removed the config"
+[ -d /var/lib/nivyx ] || die "plain uninstall removed the learned state"
+c="$(fetch https://example.com/)"; ok "$c" || die "after plain uninstall -> '$c'"
+sudo "$ROOT/scripts/install.sh" || die "reinstall failed"
+[ "$(sha /etc/nivyx/strategy.conf)" = "$conf1" ] || die "reinstall changed the kept config"
+nivyx strategy e2e-keep.example | grep -q 'tlsrec (manual' || die "the kept manual rule does not apply after reinstall"
+pass "kept /etc/nivyx and /var/lib/nivyx; reinstall uses them"
+
+stepn "uninstall --purge cleans only our own state"
 sudo "$ROOT/scripts/uninstall.sh" --purge
 systemctl list-unit-files | grep -q 'nivyx.service' && die "unit still present"
 sudo nft list table inet dpi_proxy_tp >/dev/null 2>&1 && die "table still present"
+[ -e /etc/nivyx ] && die "--purge left /etc/nivyx"
+[ -e /var/lib/nivyx ] && die "--purge left /var/lib/nivyx"
 c="$(fetch https://example.com/)"; ok "$c" || die "after uninstall -> '$c'"
 pass "uninstalled; HTTPS $c"
 

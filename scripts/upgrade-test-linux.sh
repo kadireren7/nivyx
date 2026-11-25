@@ -31,6 +31,20 @@ field() { sed -n "s/^$1: //p" "$STATUS" | head -n 1; }
 fetch() { curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$1" 2>&1 || true; }
 ok() { [[ "$1" =~ ^[23][0-9][0-9]$ ]]; }
 
+# A copy of this tree broken on purpose, for the failure tests: "build"
+# does not compile, "start" installs a unit that cannot start.
+broken_tree() {
+	local dst
+	dst="$(mktemp -d)"
+	tar --exclude=.git -C "$ROOT" -cf - . | tar -C "$dst" -xf -
+	case "$1" in
+	build) printf '\n#error injected by the test suite\n' >>"$dst/src/main.c" ;;
+	start) sed -i 's#^\[Service\]$#[Service]\nExecStartPre=/bin/false#' "$dst/systemd/nivyx.service" ;;
+	esac
+	printf '%s\n' "$dst"
+}
+sha() { sudo sha256sum "$1" | cut -d' ' -f1; }
+
 old="$(mktemp -d)/old"
 git -C "$ROOT" worktree add --detach "$old" "$OLD_TAG" >/dev/null || die "cannot check out $OLD_TAG (fetch tags?)"
 trap 'git -C "$ROOT" worktree remove --force "$old" >/dev/null 2>&1 || true' EXIT
@@ -61,6 +75,25 @@ echo "decisions on record before the upgrade: $decisions_before"
 printf '#!/bin/sh\necho third-party tool\n' | sudo tee /usr/local/bin/dpictl >/dev/null
 sudo chmod 0755 /usr/local/bin/dpictl
 pass "rule written, state recorded, third-party dpictl planted"
+
+stepn "a migration that fails its health check keeps the $OLD_TAG install"
+olde="$(sha /usr/local/bin/dpi-proxy)"
+t="$(broken_tree start)"
+rc=0; out="$(sudo "$t/scripts/install.sh" 2>&1)" || rc=$?
+rm -rf "$t"
+[ "$rc" = 4 ] || { echo "$out"; die "install.sh with a unit that cannot start exited $rc over $OLD_TAG (expected 4)"; }
+echo "$out" | grep -q 'previous state restored' || { echo "$out"; die "no rollback message"; }
+systemctl is-active --quiet dpi-proxy-transparent || die "the $OLD_TAG service is not running again"
+systemctl is-enabled --quiet dpi-proxy-transparent || die "the $OLD_TAG service is no longer enabled"
+[ -f /etc/systemd/system/dpi-proxy-transparent.service ] || die "the $OLD_TAG unit is gone"
+[ -f /etc/systemd/system/nivyx.service ] && die "the new unit was left behind"
+[ "$(sha /usr/local/bin/dpi-proxy)" = "$olde" ] || die "the $OLD_TAG engine changed"
+[ -e /usr/local/bin/nivyx-engine ] && die "the new engine was left behind"
+[ "$(sha "$OLD_CONF")" = "$conf_hash" ] || die "the $OLD_TAG config changed"
+[ -d /etc/nivyx ] && die "/etc/nivyx was left behind"
+[ "$(/usr/local/bin/dpictl)" = "third-party tool" ] || die "the third-party dpictl was altered"
+c="$(fetch https://example.com/)"; ok "$c" || die "after the failed migration -> '$c'"
+pass "exit 4; $OLD_TAG unit, engine, config and service as before; nothing new left; HTTPS $c"
 
 stepn "upgrade in place with the current installer"
 sudo "$ROOT/scripts/install.sh" || die "v2.2 install.sh failed over $OLD_TAG"

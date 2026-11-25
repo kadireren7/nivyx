@@ -1,16 +1,27 @@
 #!/usr/bin/env bash
 #
-# Removes everything scripts/install.sh installed — the transparent and
-# packet services, binaries, control CLI, learned decisions, and the
-# two nftables tables dpi-proxy owns (inet dpi_proxy_tp, inet
-# dpi_proxy). No other firewall state is touched. Needs root.
+# Removes what scripts/install.sh installed — the transparent and
+# packet services, binaries, control CLI, man page, completions and the
+# two nftables tables Nivyx owns (inet dpi_proxy_tp, inet dpi_proxy).
+# No other firewall state is touched. Needs root.
 #
-# /etc/nivyx (your manual rules) is kept unless --purge is given.
+#   sudo ./scripts/uninstall.sh           keeps your settings (/etc/nivyx)
+#                                         and learned state (/var/lib/nivyx)
+#   sudo ./scripts/uninstall.sh --purge   removes those too
+#
+# (The same on every platform: a plain uninstall keeps your data, so a
+# later reinstall picks it up; --purge / -Purge removes everything.)
 
 set -euo pipefail
 
 PURGE=0
-[ "${1:-}" = "--purge" ] && PURGE=1
+for arg in "$@"; do
+	case "$arg" in
+	--purge) PURGE=1 ;;
+	-h | --help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	*) printf '[uninstall] unknown option: %s (only --purge)\n' "$arg" >&2; exit 1 ;;
+	esac
+done
 
 # current names first, then those of installs from before v2.3
 SERVICES="nivyx nivyx-packet dpi-proxy-transparent dpi-proxy-packet"
@@ -28,6 +39,12 @@ if [ "$(id -u)" -ne 0 ]; then
 	err "this uninstaller removes system-wide services and needs root."
 	err "run: sudo $0"
 	exit 1
+fi
+
+# one install/update/repair/uninstall at a time (same lock as nivyx)
+if command -v flock >/dev/null 2>&1; then
+	exec 9>/run/nivyx-admin.lock
+	flock -n 9 || { err "another Nivyx install, update, repair or uninstall is running; try again when it has finished"; exit 1; }
 fi
 
 log "[1/4] Stopping and disabling services..."
@@ -55,18 +72,31 @@ for t in dpi_proxy_tp dpi_proxy; do
 	fi
 done
 
-log "[4/4] Removing learned state..."
-rm -rf "$STATE_DIR" "$OLD_STATE_DIR" /run/nivyx /run/dpi-proxy
-
+rm -rf /run/nivyx /run/dpi-proxy
 if [ "$PURGE" = 1 ]; then
-	rm -rf "$CONF_DIR" "$OLD_CONF_DIR"
-	log "removed $CONF_DIR"
+	log "[4/4] --purge: removing settings and learned state..."
+	rm -rf "$CONF_DIR" "$OLD_CONF_DIR" "$STATE_DIR" "$OLD_STATE_DIR"
+else
+	log "[4/4] Keeping settings and learned state"
+fi
+
+# nothing of ours may still intercept traffic
+left=""
+for s in $SERVICES; do
+	systemctl is-active --quiet "$s" 2>/dev/null && left="$left service:$s"
+done
+for t in dpi_proxy_tp dpi_proxy; do
+	nft list table inet "$t" >/dev/null 2>&1 && left="$left table:$t"
+done
+if [ -n "$left" ]; then
+	err "could not remove:$left"
+	exit 1
 fi
 
 echo
-log "Nivyx removed."
-for kept in "$CONF_DIR" "$OLD_CONF_DIR"; do
+log "Nivyx removed; networking is back to normal."
+for kept in "$CONF_DIR" "$OLD_CONF_DIR" "$STATE_DIR" "$OLD_STATE_DIR"; do
 	if [ -d "$kept" ]; then
-		echo "Manual rules kept at $kept (remove with: sudo $0 --purge)"
+		echo "Kept $kept (remove with: sudo $0 --purge)"
 	fi
 done
