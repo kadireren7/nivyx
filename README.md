@@ -54,7 +54,8 @@ Nivyx, sets up the system service and starts it.
 
 1. Download `nivyx-windows-x86_64.zip` from [Releases](https://github.com/kadireren7/nivyx/releases/latest).
 2. Extract it.
-3. Double-click **Install Nivyx.cmd**.
+3. Double-click **Install Nivyx.cmd** (not `dpi-proxy.exe`: that is the
+   internal engine the service runs).
 4. Accept the UAC prompt.
 
 [Windows guide](docs/windows.md)
@@ -107,7 +108,7 @@ One command, the same on every platform (`start`/`stop`/`restart`/
 
 ```
 $ nivyx status
-Nivyx 2.3.0
+Nivyx 2.3.1
 Service: Running
 Protection: Active
 DNS: Healthy
