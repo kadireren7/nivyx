@@ -353,8 +353,10 @@ jobs:
         run: |
           rm -f src/main.win.o
           make windows VERSION=99.0.0 CC_WIN=gcc OPENSSL_WIN_PREFIX="$(cygpath -u "$RUNNER_TEMP")/openssl-win"
-          ./dpi-proxy.exe --version | tr -d '\r' | grep -qx 'dpi-proxy 99.0.0'
           ./scripts/windows/package.sh sig99/nivyx-windows-x86_64
+          # (run from the package: WinDivert.dll must be next to the exe)
+          v="$(./sig99/nivyx-windows-x86_64/dpi-proxy.exe --version | tr -d '\r')"
+          [ "$v" = 'dpi-proxy 99.0.0' ] || { echo "99.0.0 build reports: $v"; exit 1; }
           (cd sig99 && zip -qr nivyx-windows-x86_64.zip nivyx-windows-x86_64)
           t="$(cygpath -u "$RUNNER_TEMP")"
           openssl genpkey -algorithm ed25519 -out "$t/key-a.pem"

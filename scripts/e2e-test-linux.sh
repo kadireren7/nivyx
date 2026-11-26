@@ -75,7 +75,8 @@ pass "exit 3; same engine process ($pid0), table and binary; HTTPS $c"
 stepn "one install/update/repair/uninstall at a time (U4)"
 # another administrative operation holds the lock: every other one refuses
 # and leaves the running install alone; once it is released they work again
-sudo flock /run/nivyx-admin.lock sleep 120 &
+# (-o: flock itself holds the lock, not the sleep it runs)
+sudo flock -o /run/nivyx-admin.lock sleep 120 &
 holder=$!
 for i in $(seq 1 25); do sudo flock -n /run/nivyx-admin.lock true 2>/dev/null || break; sleep 0.2; done
 pid0="$(systemctl show -p MainPID --value nivyx)"
@@ -91,8 +92,9 @@ done
 systemctl is-active --quiet nivyx && [ "$(systemctl show -p MainPID --value nivyx)" = "$pid0" ] \
 	|| die "a refused operation touched the service"
 [ -x /usr/local/bin/nivyx-engine ] && [ -f /etc/systemd/system/nivyx.service ] || die "a refused operation removed files"
-sudo pkill -f 'flock /run/nivyx-admin.lock sleep 120' || true
+sudo pkill -f 'flock -o /run/nivyx-admin.lock sleep 120' || true
 wait "$holder" 2>/dev/null || true
+for i in $(seq 1 25); do sudo flock -n /run/nivyx-admin.lock true 2>/dev/null && break; sleep 0.2; done
 out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "repair failed after the lock was released"; }
 pass "repair, uninstall and install refused while locked (service untouched); repair works once released"
 
