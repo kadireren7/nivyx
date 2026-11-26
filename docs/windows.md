@@ -60,11 +60,12 @@ window says whether it worked:
 | Code | Meaning | What changed |
 |---|---|---|
 | 0 | installed, engine running, DNS and HTTPS checked through it | installed |
-| 1 | not elevated | nothing |
+| 1 | not elevated, or another Nivyx install/update/repair/uninstall is running | nothing |
 | 2 | a package file is missing (damaged or partial download) | nothing |
 | 3 | `install.ps1` not next to the launcher (run from inside the ZIP) | nothing |
 | 4 | the service did not start or failed its health check | a fresh install is removed again; an upgrade puts the previous version back and starts it; the last log lines are shown |
 | 5 | an upgrade failed **and** the previous version could not be started again | its files are kept in `%ProgramData%\nivyx-install-backup-*`; networking works normally |
+| 6 | Windows did not start the elevated installer for a reason other than a declined prompt (e.g. a policy that blocks elevation); the reason is printed | nothing |
 | 1223 | the UAC prompt was declined | nothing |
 
 A failed install never leaves interception behind: the new service is

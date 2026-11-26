@@ -78,8 +78,11 @@ tools or VPN packet filters (`nivyx doctor` after install checks for
 the ones it can detect).
 
 Release files can be verified: every release ships `SHA256SUMS`, an
-SPDX SBOM and signed build provenance (`gh attestation verify <file>
---repo kadireren7/nivyx`). Piping a downloaded script into a root shell
+SPDX SBOM, a release manifest and signed build provenance (`gh
+attestation verify <file> --repo kadireren7/nivyx`). `nivyx update` is
+prepared to require the maintainer's offline signature on that manifest
+(docs/release-signing.md); it is not enforced yet because no signing key
+has been set up. Piping a downloaded script into a root shell
 is deliberately not offered: the Linux installer builds from the source
 you cloned, so you can read what it runs.
 

@@ -40,6 +40,8 @@ IF THE INSTALL FAILS
     2     a file is missing - download and extract the ZIP again
     4     the service did not start - the last log lines are shown
           (antivirus removing or blocking WinDivert64.sys is common)
+    6     Windows did not start it as administrator (e.g. a policy) -
+          the reason is shown, nothing changed
     1223  you declined the administrator prompt - nothing changed
 
 IF SOMETHING DOES NOT WORK
