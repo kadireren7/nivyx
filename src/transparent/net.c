@@ -63,8 +63,12 @@ static int	try_connect(const struct sockaddr *addr, socklen_t addr_len,
 		else
 			snprintf(g_connect_error, sizeof(g_connect_error),
 				"connect: socket error %d", err);
+		/* Windows reports a 4-tuple still in TIME_WAIT for a
+		 * non-blocking connect here (WSAEADDRINUSE), not from connect():
+		 * just as busy, so retried from another local port (W8) */
+		busy = (w > 0 && compat_err_addr_in_use(err));
 		compat_close(fd);
-		return (-1);
+		return (busy ? -2 : -1);
 	}
 	compat_set_nonblocking(fd, 0);
 	return (fd);

@@ -321,6 +321,19 @@ jobs:
         run: |
           make windows-tests CC_WIN=gcc OPENSSL_WIN_PREFIX="$(cygpath -u "$RUNNER_TEMP")/openssl-win"
           for t in tests/unit/test_*.exe; do ./$t; done
+      # positive control for test_connect_retry (finding W8): built against
+      # the connect code from before the fix, it must fail on Windows -
+      # otherwise the test would not reproduce what it guards against
+      - name: W8 control (the unfixed connect retry fails test_connect_retry)
+        run: |
+          git show a360890:src/transparent/net.c >tests/unit/net_unfixed.c
+          gcc -Wall -Wextra -DHAVE_TRANSPARENT -D_WIN32_WINNT=0x0A00 -D__USE_MINGW_ANSI_STDIO=1 \
+            -Iinclude -Isrc/transparent -I"$(cygpath -u "$RUNNER_TEMP")/openssl-win/include" \
+            -DNET_C='"net_unfixed.c"' tests/unit/test_connect_retry.c src/compat.win.o \
+            -lws2_32 -static -o w8-control.exe
+          rm -f tests/unit/net_unfixed.c
+          if ./w8-control.exe; then echo "the unfixed code passed: the test does not reproduce W8 here"; exit 1; fi
+          echo "unfixed code fails the test as expected (W8 reproduced); the fixed code passes it (unit tests above)"
       - name: package
         run: ./scripts/windows/package.sh dist
       - name: the engine embeds the pinned OpenSSL, with absolute directories

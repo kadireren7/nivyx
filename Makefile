@@ -301,7 +301,8 @@ windows: $(WIN_OBJ)
 
 # Pure unit tests built for Windows (run them with wine, or on
 # Windows): the shared decision/DNS/TLS-parsing core.
-WIN_TESTS = test_dns test_transparent test_tls test_tls_record test_strategy
+WIN_TESTS = test_dns test_transparent test_tls test_tls_record test_strategy \
+	test_connect_retry
 WIN_TEST_OBJ = src/dns/dns.win.o src/dns/dns_udp.win.o src/compat.win.o \
 	src/transparent/policy.win.o src/transparent/pf_rules.win.o \
 	src/strategy/strategy.win.o \
