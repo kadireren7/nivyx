@@ -16,12 +16,49 @@
 
 Checksums vs provenance: `SHA256SUMS` comes from the same release as
 the files, so it detects a damaged or partial download, not a
-compromised release; the signed build-provenance attestation is what
-ties a file to this repository's workflow, but `nivyx update` cannot
-check it without the `gh` CLI. A signature the updater checks against a
-key it already has (e.g. minisign/signify, or Sigstore keyless with a
-small verifier) would close that gap; it needs a project signing key and
-is not implemented yet.
+compromised release. The signed build-provenance attestation is what
+ties a file to this repository's release workflow. You can check it
+yourself:
+
+    gh attestation verify nivyx-windows-x86_64.zip --repo kadireren7/nivyx
+
+**Could `nivyx update` check the provenance itself?** Evaluated, not
+implemented. The attestation is a Sigstore bundle (a DSSE envelope signed
+with a short-lived Fulcio certificate and logged in Rekor). Verifying it
+means validating that certificate chain against Sigstore's root (TUF
+metadata), the certificate's workflow identity and the transparency-log
+inclusion proof. On the machines that run the updater this would need
+`gh` (with a GitHub login) or `cosign`, neither of which is installed
+there, or a verifier of our own that tracks Sigstore's root rotation —
+a large, fast-moving dependency for a tool that otherwise needs only
+bash/sh/PowerShell, curl and the system's OpenSSL.
+
+The proportionate alternative, for a decision by the maintainers: sign
+`SHA256SUMS` with a project key kept offline and publish
+`SHA256SUMS.sig`; the updater checks it against the public key it ships
+with before trusting any checksum. RSA (3072-bit) signatures can be
+checked everywhere without new dependencies: `openssl dgst -sha256
+-verify` on Linux and macOS (also LibreSSL), `RSACryptoServiceProvider`
+in Windows PowerShell 5.1. Updaters from v2.2/v2.3 ignore the extra
+file, so the release stays compatible; only updaters that ship the key
+would enforce it. This needs a key generated and held by the maintainers,
+a rotation/revocation plan and a release step that signs; none of that
+exists yet and no key was generated here.
+
+OpenSSL configuration on Windows: the engine never loads an OpenSSL
+configuration file (`OPENSSL_INIT_NO_LOAD_CONFIG`, `src/tlsclient.c`).
+Up to v2.3.0 it did: libssl loads a configuration by default, the MSYS2
+OpenSSL it linked honours `OPENSSL_CONF` (verified on real Windows in
+CI), and a configuration can load provider DLLs. Where it looks by
+default: under wine it was `etc\ssl\openssl.cnf` relative to the current
+directory, but on real Windows (CI) a file planted there was **not**
+read, so the wine result does not carry over; the real default location
+is measured by the update-compat test (see docs/PROGRESS.md). The service
+environment and `%ProgramFiles%` are writable by administrators only, so
+no privilege escalation in a normal install has been shown; this is
+hardening that removes a code-loading path. Linux keeps the
+distribution's OpenSSL configuration on purpose (system crypto
+policies); macOS's static OpenSSL uses the root-owned `/private/etc/ssl`.
 
 Install-script integrity: the Linux installer builds from the checkout
 you made (so you can read exactly what runs as root); Windows/macOS
@@ -35,7 +72,7 @@ no integrity check of its own beyond TLS to GitHub.
 |---|---|---|---|
 | Nivyx engine and CLI | this repository | see `VERSION` | — |
 | OpenSSL | Linux: system `libssl` (dynamic); macOS: static | system / 3.5.8 | macOS: source hash pinned. Linux: distribution package |
-| OpenSSL | Windows: MSYS2 `mingw-w64-x86_64-openssl` | current at build time (v2.3.0: 3.6.4) | **no** — the MSYS2 package version is not pinned; the SBOM now records the version embedded in the shipped `dpi-proxy.exe` instead of `NOASSERTION` |
+| OpenSSL | Windows: static, built with MinGW (`scripts/windows/build-openssl.sh`) | 3.5.8 (the macOS pin) | yes — official source archive, SHA-256 pinned; CI checks that `dpi-proxy.exe` embeds that version, `gen-sbom.sh` refuses a release that does not. Up to v2.3.0 it was the MSYS2 package current on the build day (v2.3.0: 3.6.4) |
 | WinDivert | Windows | 2.2.2-A | SHA-256 pinned |
 | MSYS2 / GCC toolchains | CI | runner image | not pinned |
 

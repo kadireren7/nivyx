@@ -51,21 +51,46 @@ function Log-Since([int]$n) {
     return $all[$n..($all.Count - 1)]
 }
 # Does the installed engine apply an OpenSSL configuration (1) named by
-# OPENSSL_CONF in the service environment, (2) found as etc\ssl\openssl.cnf
-# below its working directory when run by hand? Leaves the service running.
+# OPENSSL_CONF in the service environment, (2) found at one of the places a
+# MinGW OpenSSL may look by default (relative to the exe, or the drive root),
+# (3) found as etc\ssl\openssl.cnf below its working directory when run by
+# hand? Returns which ones applied; leaves the service running.
+function Service-AppliesConfig([scriptblock]$plant, [scriptblock]$unplant) {
+    $n = @(Get-Content $LogFile -ErrorAction SilentlyContinue).Count
+    & $plant
+    Restart-Service dpi-proxy
+    $null = Wait-Ready
+    foreach ($i in 1..40) { if ((Log-Since $n) -match 'transparent mode: TCP/443|DNS-over-HTTPS unavailable') { break }; Start-Sleep -Milliseconds 250 }
+    $applied = [bool]((Log-Since $n) -match 'DNS-over-HTTPS unavailable')
+    & $unplant
+    return $applied
+}
 function Test-LoadsOpenSslConfig {
     $dir = Join-Path $env:TEMP ('nivyx-cnf-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force -Path (Join-Path $dir 'etc\ssl') | Out-Null
     $cnf = Join-Path $dir 'etc\ssl\openssl.cnf'
     Set-Content -Encoding ASCII $cnf $HostileCnf
-    $res = @{}
+    $res = [ordered]@{}
     $key = 'HKLM:\SYSTEM\CurrentControlSet\Services\dpi-proxy'
-    $n = @(Get-Content $LogFile -ErrorAction SilentlyContinue).Count
-    New-ItemProperty -Path $key -Name Environment -PropertyType MultiString -Value @("OPENSSL_CONF=$cnf") -Force | Out-Null
-    Restart-Service dpi-proxy
-    $null = Wait-Ready
-    $res.env = [bool]((Log-Since $n) -match 'DNS-over-HTTPS unavailable')
-    Remove-ItemProperty -Path $key -Name Environment
+    $res.env = Service-AppliesConfig {
+        New-ItemProperty -Path $key -Name Environment -PropertyType MultiString -Value @("OPENSSL_CONF=$cnf") -Force | Out-Null
+    } { Remove-ItemProperty -Path $key -Name Environment }
+    # default locations, each tried alone (only if nothing is there already)
+    $places = [ordered]@{
+        exedir  = Join-Path $InstDir 'etc\ssl'
+        exeup   = Join-Path (Split-Path $InstDir -Parent) 'etc\ssl'
+        mingw64 = Join-Path ($env:SystemDrive + '\') 'mingw64\etc\ssl'
+    }
+    foreach ($k in $places.Keys) {
+        $d = $places[$k]
+        if (Test-Path (Join-Path $d 'openssl.cnf')) { $res[$k] = 'skipped (exists)'; continue }
+        $made = -not (Test-Path $d)
+        $res[$k] = Service-AppliesConfig {
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+            Copy-Item $cnf (Join-Path $d 'openssl.cnf')
+        } { Remove-Item (Join-Path $d 'openssl.cnf') -Force; if ($made) { Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue } }
+    }
+    # by hand, below the working directory
     Stop-Service dpi-proxy
     $n = @(Get-Content $LogFile -ErrorAction SilentlyContinue).Count
     $p = Start-Process -FilePath (Join-Path $InstDir 'dpi-proxy.exe') -ArgumentList '--mode', 'transparent' `
@@ -80,9 +105,12 @@ function Test-LoadsOpenSslConfig {
     Start-Service dpi-proxy
     $null = Wait-Ready
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "OpenSSL config applied: via OPENSSL_CONF=$($res.env), via .\etc\ssl\openssl.cnf=$($res.cwd)"
+    Write-Host ('OpenSSL config applied: ' + (($res.Keys | ForEach-Object { "$_=$($res[$_])" }) -join ', '))
     return $res
 }
+# any of the places applied it
+function Any-Applied($r) { return [bool](@($r.Values | Where-Object { $_ -eq $true }).Count) }
+function Any-File-Applied($r) { return [bool](@('exedir', 'exeup', 'mingw64', 'cwd' | Where-Object { $r[$_] -eq $true }).Count) }
 function Fetch($url) { return "$(& curl.exe -sS -o NUL -w '%{http_code}' --max-time 20 $url 2>&1)" }
 # Ready = the service runs and the engine it started reported "running"
 # (the status file carries that process's pid). Bounded: 30 s.
@@ -137,10 +165,10 @@ Pass "$oldVersion installed, manual rule added"
 
 Step "control: the $oldVersion engine applies OpenSSL configuration files (fixed in the candidate)"
 $r = Test-LoadsOpenSslConfig
-if (-not ($r.env -and $r.cwd)) {
-    Die "the $oldVersion engine did not apply the test configuration (env=$($r.env) cwd=$($r.cwd)): the check below would prove nothing"
+if (-not ($r.env -and (Any-File-Applied $r))) {
+    Die "the $oldVersion engine applied neither OPENSSL_CONF nor a configuration file at any place tried: the check below would prove nothing"
 }
-Pass "$oldVersion reads OPENSSL_CONF and .\etc\ssl\openssl.cnf below its working directory"
+Pass "$oldVersion applies OPENSSL_CONF and a configuration file (see the line above for where)"
 
 Step "serve the candidate $newVersion as the latest release"
 $mock = Join-Path $env:TEMP "nivyx-compat-$PID"
@@ -199,8 +227,8 @@ Pass 'config kept, manual rule applies, HTTPS, doctor and repair fine'
 
 Step "the updated engine never applies an OpenSSL configuration file"
 $r = Test-LoadsOpenSslConfig
-if ($r.env -or $r.cwd) { Die "after the update the engine still applies OpenSSL configuration files (env=$($r.env) cwd=$($r.cwd))" }
-Pass 'neither OPENSSL_CONF nor .\etc\ssl\openssl.cnf is read any more'
+if (Any-Applied $r) { Die 'after the update the engine still applies an OpenSSL configuration' }
+Pass 'no OpenSSL configuration is read any more (OPENSSL_CONF, default locations, working directory)'
 
 Step 'uninstall'
 & powershell -ExecutionPolicy Bypass -File (Join-Path $NewPackage 'uninstall.ps1') -Purge

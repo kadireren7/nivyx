@@ -55,21 +55,46 @@ function Log-Since([int]$n) {
     return $all[$n..($all.Count - 1)]
 }
 # Does the installed engine apply an OpenSSL configuration (1) named by
-# OPENSSL_CONF in the service environment, (2) found as etc\ssl\openssl.cnf
-# below its working directory when run by hand? Leaves the service running.
+# OPENSSL_CONF in the service environment, (2) found at one of the places a
+# MinGW OpenSSL may look by default (relative to the exe, or the drive root),
+# (3) found as etc\ssl\openssl.cnf below its working directory when run by
+# hand? Returns which ones applied; leaves the service running.
+function Service-AppliesConfig([scriptblock]$plant, [scriptblock]$unplant) {
+    $n = @(Get-Content $LogFile -ErrorAction SilentlyContinue).Count
+    & $plant
+    Restart-Service dpi-proxy
+    $null = Wait-Ready
+    foreach ($i in 1..40) { if ((Log-Since $n) -match 'transparent mode: TCP/443|DNS-over-HTTPS unavailable') { break }; Start-Sleep -Milliseconds 250 }
+    $applied = [bool]((Log-Since $n) -match 'DNS-over-HTTPS unavailable')
+    & $unplant
+    return $applied
+}
 function Test-LoadsOpenSslConfig {
     $dir = Join-Path $env:TEMP ('nivyx-cnf-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force -Path (Join-Path $dir 'etc\ssl') | Out-Null
     $cnf = Join-Path $dir 'etc\ssl\openssl.cnf'
     Set-Content -Encoding ASCII $cnf $HostileCnf
-    $res = @{}
+    $res = [ordered]@{}
     $key = 'HKLM:\SYSTEM\CurrentControlSet\Services\dpi-proxy'
-    $n = @(Get-Content $LogFile -ErrorAction SilentlyContinue).Count
-    New-ItemProperty -Path $key -Name Environment -PropertyType MultiString -Value @("OPENSSL_CONF=$cnf") -Force | Out-Null
-    Restart-Service dpi-proxy
-    $null = Wait-Ready
-    $res.env = [bool]((Log-Since $n) -match 'DNS-over-HTTPS unavailable')
-    Remove-ItemProperty -Path $key -Name Environment
+    $res.env = Service-AppliesConfig {
+        New-ItemProperty -Path $key -Name Environment -PropertyType MultiString -Value @("OPENSSL_CONF=$cnf") -Force | Out-Null
+    } { Remove-ItemProperty -Path $key -Name Environment }
+    # default locations, each tried alone (only if nothing is there already)
+    $places = [ordered]@{
+        exedir  = Join-Path $InstDir 'etc\ssl'
+        exeup   = Join-Path (Split-Path $InstDir -Parent) 'etc\ssl'
+        mingw64 = Join-Path ($env:SystemDrive + '\') 'mingw64\etc\ssl'
+    }
+    foreach ($k in $places.Keys) {
+        $d = $places[$k]
+        if (Test-Path (Join-Path $d 'openssl.cnf')) { $res[$k] = 'skipped (exists)'; continue }
+        $made = -not (Test-Path $d)
+        $res[$k] = Service-AppliesConfig {
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+            Copy-Item $cnf (Join-Path $d 'openssl.cnf')
+        } { Remove-Item (Join-Path $d 'openssl.cnf') -Force; if ($made) { Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue } }
+    }
+    # by hand, below the working directory
     Stop-Service dpi-proxy
     $n = @(Get-Content $LogFile -ErrorAction SilentlyContinue).Count
     $p = Start-Process -FilePath (Join-Path $InstDir 'dpi-proxy.exe') -ArgumentList '--mode', 'transparent' `
@@ -84,9 +109,12 @@ function Test-LoadsOpenSslConfig {
     Start-Service dpi-proxy
     $null = Wait-Ready
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "OpenSSL config applied: via OPENSSL_CONF=$($res.env), via .\etc\ssl\openssl.cnf=$($res.cwd)"
+    Write-Host ('OpenSSL config applied: ' + (($res.Keys | ForEach-Object { "$_=$($res[$_])" }) -join ', '))
     return $res
 }
+# any of the places applied it
+function Any-Applied($r) { return [bool](@($r.Values | Where-Object { $_ -eq $true }).Count) }
+function Any-File-Applied($r) { return [bool](@('exedir', 'exeup', 'mingw64', 'cwd' | Where-Object { $r[$_] -eq $true }).Count) }
 function Fetch($url) {
     $out = & curl.exe -sS -o NUL -w '%{http_code}' --max-time 20 $url 2>&1
     return "$out"
@@ -273,13 +301,13 @@ Write-Host $out
 if ($LASTEXITCODE -ne 0 -or -not $out.Trim()) { Die 'nivyx version printed nothing' }
 Pass 'nivyx status/diagnose/logs/version report correctly'
 
-Step 'OpenSSL configuration files are never loaded (OPENSSL_CONF, .\etc\ssl\openssl.cnf)'
+Step 'OpenSSL configuration files are never loaded (OPENSSL_CONF, default locations, working directory)'
 $r = Test-LoadsOpenSslConfig
-if ($r.env -or $r.cwd) { Die 'the engine applied an OpenSSL configuration file (it must never read one on Windows)' }
+if (Any-Applied $r) { Die 'the engine applied an OpenSSL configuration (it must never read one on Windows)' }
 if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service not running after the config test' }
 $c = Fetch 'https://example.com/'
 if ($c -notmatch '^[23]\d\d$') { Die "after the config test -> '$c'" }
-Pass 'neither OPENSSL_CONF nor a planted etc\ssl\openssl.cnf is read; service restored'
+Pass 'no OpenSSL configuration is read (OPENSSL_CONF, default locations, working directory); service restored'
 
 Step 'nivyx doctor'
 $out = (& $nivyxCmd doctor 2>&1 | Out-String)
