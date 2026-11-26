@@ -35,7 +35,15 @@ trap 'kill $httpd 2>/dev/null || true; git -C "$ROOT" worktree remove --force "$
 make -C "$ROOT" clean >/dev/null && make -C "$ROOT" >/dev/null || die "build failed"
 new_version="$(cat "$ROOT/VERSION")"
 tree_version="$new_version"
-"$ROOT/scripts/package-linux.sh" "$mock/out" >/dev/null
+# NIVYX_TEST_PACKAGE: the exact archive a release would publish (release
+# workflow) instead of one packaged here
+if [ -n "${NIVYX_TEST_PACKAGE:-}" ]; then
+	mkdir -p "$mock/out" && cp "$NIVYX_TEST_PACKAGE" "$mock/out/nivyx-linux-x86_64.tar.gz"
+	tar -xzOf "$mock/out/nivyx-linux-x86_64.tar.gz" nivyx-linux-x86_64/dpi-proxy >"$mock/engine" && chmod +x "$mock/engine"
+	[ "$("$mock/engine" --version)" = "dpi-proxy $new_version" ] || die "$NIVYX_TEST_PACKAGE is not version $new_version"
+else
+	"$ROOT/scripts/package-linux.sh" "$mock/out" >/dev/null
+fi
 (cd "$mock/out" && sha256sum nivyx-linux-x86_64.tar.gz > SHA256SUMS)
 cat > "$mock/out/latest.json" <<JSON
 {"tag_name":"v$new_version","prerelease":false,"assets":[
