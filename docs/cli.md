@@ -172,8 +172,13 @@ Update available.
    an update archive rather than an installer; `nivyx-macos-<arch>.zip`,
    `nivyx-windows-x86_64.zip`) and `SHA256SUMS`,
    and refuses download URLs outside `github.com/kadireren7/nivyx`;
-3. verifies the SHA-256 **before** unpacking anything, then checks that
-   the new engine runs here and reports the expected version;
+3. verifies the SHA-256 **before** unpacking anything; once release
+   signing is set up (docs/release-signing.md) it also requires the signed
+   `nivyx-release.manifest`: a valid signature by a key the CLI carries,
+   the announced version (no substituted or replayed release), newer than
+   the installed one (no downgrade), and the archive's signed SHA-256 —
+   until then it prints `release signatures are not checked yet`; then it
+   checks that the new engine runs here and reports the expected version;
 4. backs up the files it replaces, swaps them in (rename-based on
    Linux/macOS), restarts the service;
 5. runs a health check (the status file must come from the *new* service

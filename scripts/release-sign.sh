@@ -114,7 +114,8 @@ release)
 	need_openssl
 	key="${2:?KEY.pem}"; dir="${3:?DIR}"; ver="${4:?VERSION}"
 	cmd_check "$dir" "$ver"
-	grep -q "^ed25519 $(pub_b64 "$key") " "$ROOT/scripts/release-keys.txt" \
+	b64="$(pub_b64 "$key")"
+	awk -v k="$b64" '$1 == "ed25519" && $2 == k { f = 1 } END { exit !f }' "$ROOT/scripts/release-keys.txt" \
 		|| die "this key is not in scripts/release-keys.txt: users' updaters would not trust it"
 	[ ! -e "$dir/$MANIFEST_NAME.sig" ] || [ -n "${APPEND_SIGNATURE:-}" ] \
 		|| die "$dir/$MANIFEST_NAME.sig exists (set APPEND_SIGNATURE=1 to add a second signature)"

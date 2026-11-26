@@ -132,6 +132,28 @@ sha256sum -c SHA256SUMS --ignore-missing
 the repo's `VERSION` file) — it will match the release tag for any
 official build.
 
+### Release workflow and dry run
+
+`.github/workflows/release.yml` has one path for both modes:
+
+- **release**: push the tag `v<VERSION>` (it must equal `VERSION`);
+- **dry run**: `Actions → release → Run workflow` (or `gh workflow run
+  release.yml --ref <branch>`); nothing is published.
+
+Jobs: `preflight` (version, mode, release keys in sync) → `ci` (the whole
+`build.yml` matrix as a reusable workflow; its artifacts are the release
+packages) → `assemble` (the exact release set: packages, SBOM,
+`nivyx-release.manifest`, `SHA256SUMS`; consistency and layout checks;
+stored as the `release-assets` artifact) → `final-linux`, `final-macos`
+(arm64, Intel), `final-windows` (the v2.3.0 updater installs the final
+files; macOS and Windows end-to-end from the final archives) and
+`provenance` (attest and verify every file) → `publish`. Only `publish`
+can write repository contents; it runs only for a pushed `v*` tag (job
+condition and a guard step). With a release key in
+`scripts/release-keys.txt` the release is created as a draft for offline
+signing (docs/release-signing.md). The dry run's `release-assets`
+artifact holds exactly the files a release would publish.
+
 ## Optional: TLS ClientHello splitting in the SOCKS5 proxy
 
 Separate from packet mode's `SPLIT` strategy. Set
@@ -202,6 +224,14 @@ release together with a unit migration that has its own upgrade test.
   breakage), and `update` against a local mock release server
   (`NIVYX_RELEASE_API`): wrong checksum, a release that cannot start
   (rolled back), and a good release.
+- `scripts/release-verify-test.sh` — the engine's release-signature check
+  (temporary keys); `scripts/update-signature-test-linux.sh`,
+  `scripts/windows/update-signature-test.ps1` and the signature part of
+  `scripts/macos/update-test.sh` — the updaters against the 8 mock
+  releases of `scripts/signed-release-cases.sh` (docs/release-signing.md).
+- `scripts/macos/update-test.sh` — the v2.2.2/v2.3.0 macOS updaters (as
+  released) install the candidate; both they and the candidate updater
+  roll back a release that cannot start; settings and learned state kept.
 - `scripts/upgrade-test-linux.sh`, `scripts/macos/upgrade-test.sh`,
   `scripts/windows/upgrade-test.ps1` — a real v2.1.0 install (tagged
   source / the published ZIP, checksum-verified) upgraded in place.
