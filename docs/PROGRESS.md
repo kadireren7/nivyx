@@ -3,7 +3,7 @@
 Branches: `fix/windows-runtime-packaging` (Windows runtime/packaging),
 `hardening/cross-platform` (on top of it: Linux, macOS, update contract,
 diagnostics, supply chain, CI). Nothing merged to `main`, no tag, no
-release. Version in the tree: 2.3.1 (not tagged).
+release until v2.4.0 (see "v2.4.0 release" at the end). Version: 2.4.0.
 
 Legend: ✅ done and verified (where/how stated) · 🟡 done, verified in CI
 only (no local root/Windows/macOS) · ⏳ waiting for CI · ⛔ not possible
@@ -239,7 +239,7 @@ mode): Linux engine 113,312 B before and after, idle RSS 3.3 MB both.
 | L5 | P2 | Linux plain uninstall deletes learned state (Windows keeps it) | 🟡 kept unless `--purge`; unknown options rejected; verifies no interception left |
 | L6 | P1 | v2.3.0 Linux update package needs glibc 2.38: `nivyx update` refuses it on Debian 12 / Ubuntu 22.04 | ✅ measured on the v2.3.0 asset; fix ✅ CI: built in `ubuntu:22.04`, `check-linux-package.sh` enforces ≤ 2.35, runs on Debian 12, Ubuntu 22.04/24.04, Tumbleweed |
 | L7 | P1 | Fedora 45 (OpenSSL 4.0.3) and Arch (4.1.0) have no `libssl.so.3`: no prebuilt Linux engine (old or new) runs there, so `nivyx update` cannot work | ✅ seen in CI; refusal now explains and points to `git pull && install.sh`; source build against OpenSSL 4 in CI (`linux-source-openssl4`) ⏳. A package for OpenSSL 4 (or static OpenSSL) is not done: decision for you |
-| L8 | P2 | Ubuntu 26.04 (now `ubuntu-latest`, systemd 259): after `systemctl kill -s KILL` systemd skips ExecStopPost, the nft table stays and HTTPS is refused until the restart (~2 s). The e2e used `systemctl kill` as its "crash", so it failed on unchanged `main` too. A real crash (`kill -9` from outside systemd) runs ExecStopPost within ~25 ms: table removed, HTTPS 200 after 1 s | ✅ measured in CI (diagnostics run). The crash test now kills like a real crash (same 1 s expectation); `systemctl kill` gets its own check (HTTPS back after the restart); documented in docs/linux.md |
+| L8 | P2 | Ubuntu 26.04 (now `ubuntu-latest`, systemd 259): after `systemctl kill -s KILL` systemd skips ExecStopPost, the nft table stays and HTTPS is refused until the restart (~2 s). The e2e used `systemctl kill` as its "crash", so it failed on unchanged `main` too. A real crash (`kill -9` from outside systemd) runs ExecStopPost within ~25 ms: table removed, HTTPS 200 after 1 s | ✅ measured in CI (diagnostics run). The crash test now kills like a real crash (same 1 s expectation); `systemctl kill` gets its own check (HTTPS back after the restart); documented in docs/linux.md. **Accepted for v2.4.0 as a documented known limitation** (README/release notes, docs/linux.md) |
 | E1 | P1 | **Source build fails with OpenSSL 4** (Arch 4.1, Fedora 45): `SSL_set1_host` is deprecated in 4.0 and the build uses -Werror, so `install.sh` cannot install Nivyx there | ✅ seen in CI; fixed: `SSL_set1_dnsname()` on OpenSSL >= 4. The return value is now checked on both versions: if the name cannot be set the handshake fails, instead of verifying the certificate without a name (DoH server authenticity) ⏳ CI |
 | M1 | P1 | macOS uninstall always removes settings, learned state, logs; `--purge` does not exist | 🟡 kept unless `--purge` |
 | M2 | P2 | macOS `.command` launchers always exit 0 | 🟡 real code |
@@ -249,7 +249,7 @@ mode): Linux engine 113,312 B before and after, idle RSS 3.3 MB both.
 | U1 | P1 | Updaters (all 3): fixed rollback dir and staging names; backup deleted even when rollback failed; man page/completions not in rollback | 🟡 unique dirs, kept on failure, full file set |
 | U2 | P2 | `NIVYX_RELEASE_API` accepts any URL | ✅ (Linux, local) 🟡 (macOS/Windows): only 127.0.0.1/localhost |
 | U3 | P2 | Linux/macOS updater extracts without checking members | ✅ links, `..`, foreign top folders refused (tested locally with crafted archives) |
-| U4 | P2 | No lock: concurrent install/update/repair/uninstall | 🟡 Phase 13: all three platforms lock install, update, repair and uninstall (Linux flock; macOS lock dir with pid, a dead owner's lock taken over by rename; Windows named mutex, released by Windows if the holder dies). Tested in all three e2e suites (another process holds the lock → refusals, service untouched → proceeds once released). Residual: on macOS two processes that both find the same dead owner at the same instant could both proceed (no flock(1) there) |
+| U4 | P2 | No lock: concurrent install/update/repair/uninstall | ✅ all three platforms lock install, update, repair and uninstall (Linux flock; macOS atomic symlink lock with guarded stale takeover — the earlier directory lock let two processes take over the same dead owner, fixed for v2.4.0 with `scripts/macos/lock-race-test.sh`, whose positive control fails the old lock: two holders at once in 20 of 20 rounds on macOS arm64 and Intel (CI 45793692154), 37 of 40 locally; the new lock 0; Windows named mutex). Tested in all three e2e suites |
 | D1 | P2 | `status` "Active" from a stale status file / hung engine (Linux checked no PID; no platform checked the heartbeat) | ✅ Linux logic tested locally with stubs; 🟡 macOS/Windows |
 | S1 | P2 | SBOM: Windows OpenSSL `NOASSERTION`, Nivyx license `NOASSERTION`, Linux runtime OpenSSL missing | ✅ version read from the shipped exe (3.6.4 in v2.3.0) |
 | S2 | P3 | No updater-checked signature (SHA256SUMS comes from the same release) | 🟡 Phase 13: implemented, **not enforced**: Ed25519 over a versioned manifest, checked by the installed engine in all three updaters (fail-closed, downgrade/substitution refused); enforced once the maintainer adds the offline key (docs/release-signing.md). No key generated |
@@ -280,7 +280,7 @@ mode): Linux engine 113,312 B before and after, idle RSS 3.3 MB both.
 
 ## Local verification (this machine, no root)
 
-Phase 13 (this machine): `make re`, `make test` (16 suites incl.
+Phase 13 (this machine): `make re`, `make test` (15 suites incl.
 test_connect_retry), `make sanitize`; `release-verify-test.sh` plain and
 with an ASan/UBSan engine (20/20, no report); 4000 mutated signature /
 keyring files against the ASan engine (0 reports); the Linux and macOS
@@ -321,8 +321,7 @@ Still open:
   mode and the offline signing ceremony have never run.
 - **L8** `systemctl kill` on systemd 259: ~3 s of refused HTTPS until the
   restart; cause in systemd not identified; real crashes unaffected.
-- **macOS lock** (U4 residual): two processes finding the same dead owner
-  at the same instant could both proceed (no flock(1) on macOS).
+  Accepted as a known limitation for v2.4.0.
 - **OpenSSL 4 distributions** (Fedora 45+, Arch): source install only, no
   update package (L7).
 - **UAC and Gatekeeper prompts, antivirus, macOS 11-14**: not testable in
@@ -364,3 +363,16 @@ checklist), 0810a4f (E3 data race), 75b6707 (test fix), 55fab4a (W8 fix +
 regression test), be31de8 (W8 control), c74b475 (docs), 38e93a2 (R1 SBOM
 fix; release tooling in CI). Verified state: 38e93a2 — build 45786750460
 34/34, release dry run 45786770442 41/42 (publish skipped by design).
+
+## v2.4.0 release
+
+Scope frozen. Final changes: macOS lock stale-takeover race fixed (U4,
+`lock-race-test.sh` with positive control), version 2.4.0, release notes
+covering v2.3.0 -> v2.4.0, README states the testing status (no
+physical-device validation) and that Ed25519 enforcement is off. L8
+accepted as a known limitation; no OpenSSL 4 binary package (Fedora/Arch
+install from source). Ed25519 infrastructure stays inactive; no key.
+
+Pre-merge validation on 6bf9c83: build 45793692154 34/34; release dry run
+45793712918 41/42 (publish skipped by design). Publication results are
+recorded below after the tag ran.
