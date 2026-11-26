@@ -1034,7 +1034,7 @@ MANIFEST_NAME=nivyx-release.manifest
 # The download URL of release asset $1 ("" if the release has none).
 asset_url() {
 	printf '%s' "$release_json" | grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*/'"${1//./\\.}"'"' \
-		| sed 's/.*"\(http[^"]*\)"$/\1/' | head -n 1
+		| sed 's/.*"\(http[^"]*\)"$/\1/' | head -n 1 || true	# none: "" (not an exit under set -e)
 }
 
 # Official repository only; with the test override, this machine only.
