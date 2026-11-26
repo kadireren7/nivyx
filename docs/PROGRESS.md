@@ -18,14 +18,105 @@ here (stated why).
 | 45734167213 | 630dd25 | **30/30** |
 | 45735212794 | 630dd25 (re-run, workflow_dispatch) | **30/30** |
 | 45735202409 | 630dd25 (re-run, workflow_dispatch) | 29/30, then **30/30**: `shellcheck` lost its runner during `apt-get install` (GitHub annotation: "The hosted runner lost communication with the server"; no Nivyx code had run); that one job re-run: passed |
+| 45777694148 | 434aba6 (Phase 13 start) | 30/34: linux-e2e + linux-arm64 (my lock test: `flock` handed the lock to `sleep`), linux-upgrade (U5: silent updater exit), windows (my CI step ran the 99.0.0 exe without WinDivert.dll) |
+| 45778878182 | 8278452 | 32/34: engine-sanitizers (**E3, real data race**, fixed), linux-upgrade (test restarted the service into systemd's start limit) |
+| 45780449466 | 75b6707 | 28/30: windows (**W8 reproduced**: `socket error 10048`, root cause found) |
+| 45780470849 | 75b6707, release dry run | CI matrix green (W8 did not occur in that run's windows job), `assemble` failed: **R1** (seen only later, when 45784787236 failed the same way) |
+| 45783308004 | 55fab4a | 28/30: windows (W8 positive-control step could not fetch the old file; the fixed test passed on Windows) |
+| **45784766015** | be31de8 | **34/34** |
+| 45784787236 | be31de8, release dry run | 35/41: `assemble` failed (**R1**: SBOM generator broken since dece6c6), later jobs skipped, nothing published |
+| **45786750460** | **38e93a2** | **34/34** |
+| **45786770442** | **38e93a2, release dry run** | **41/42 = everything except `publish`, which is skipped by design**: CI matrix 34/34, assemble, final-linux, final-macos x2, final-windows, provenance (7/7 attestations verified); no release, no tag |
 
 Reliability of the previously failing jobs on 630dd25: `linux-arm64`
 3/3, `windows-upgrade (v2.3.0, upgrade)` 3/3, `engine-sanitizers` 3/3,
 all other jobs 3/3 except the one runner loss above.
 
 No suppressions, no sanitizer options turned off, no assertion relaxed.
-The release workflow (`release.yml`) runs only on a tag and was not run
-(no tag was created); its jobs mirror `build.yml`'s, YAML-validated.
+Phase 13 failures were all diagnosed; none was re-run away (each is
+listed above with its cause). Cancelled (superseded by a fix pushed while
+they ran): 45777709805, 45778814620, 45778788822, 45778908270,
+45783332626.
+The release workflow is exercised by `workflow_dispatch` (dry run);
+publishing (a pushed tag) has not been run.
+
+## Phase 13 — final release blockers
+
+**1. Signed updates (S2/S5) — implemented, not enforced.**
+`dpi-proxy --verify-release` (`src/release_verify.c`, 271 lines): Ed25519
+through the OpenSSL the engine already links on every platform, no
+configuration file read (`OPENSSL_INIT_NO_LOAD_CONFIG`; without it
+libcrypto applies `OPENSSL_CONF` — mutation-checked). The release
+workflow publishes `nivyx-release.manifest` (format 1: product, version,
+commit, SHA-256 of every file); the maintainer signs it offline
+(`scripts/release-sign.sh`, docs/release-signing.md). All three updaters,
+before unpacking or running anything downloaded, require (once they carry
+a key): both files, a valid signature by a carried key (checked by the
+installed engine), the signed version equal to the announced one
+(substitution/replay) and newer than the installed one (downgrade), and
+the archive's signed SHA-256. `scripts/release-keys.txt` is empty: **no
+key was generated**; updaters say "release signatures are not checked yet"
+and behave as before. Old updaters ignore the new files (their own tests
+pass unchanged). Key rotation: primary + offline recovery key, dual
+signatures, documented recovery. Tests: `release-verify-test.sh` (20
+cases; Linux, macOS, Windows; ASan/UBSan clean; 4000 mutated inputs under
+ASan, 0 reports); `signed-release-cases.sh` (unsigned, no signature,
+modified manifest, modified package with matching SHA256SUMS, wrong key,
+substituted old manifest, old release as "latest", valid) run against
+real installs on Linux, macOS (arm64 + Intel) and Windows: every bad case
+refused with engine, CLI, service process and config unchanged; the valid
+one installs and keeps config and learned state; with no key configured
+the update works as before.
+
+**2. macOS old updaters (C1).** `scripts/macos/update-test.sh`, CI
+`macos-update` (arm64 + Intel x v2.2.2 + v2.3.0): the updater code as
+released (macOS updater identical in v2.2.0-v2.3.0, `git diff` empty)
+installs the candidate; the candidate's and the old updater both roll
+back a release whose engine cannot start; manual rule, config hash and a
+planted learned decision survive; v2.3.0 rows also run every signature
+case. Passed in 45784766015 and 45786750460, and in the dry run
+against the final zips (final-macos).
+
+**3. Release dry run (R1).** `release.yml`: tag = publish, `Run workflow`
+= dry run, one path: the whole `build.yml` matrix (`workflow_call`), then
+`assemble` (exact release set, consistency and layout checks), then the
+final files tested again (v2.3.0 updater installs them on Linux, macOS,
+Windows; macOS and Windows e2e from the final archives), provenance
+attested and verified, then `publish` — the only job with
+`contents: write`, run only for a pushed `v<VERSION>` tag (condition +
+guard step); draft when a key is configured. The dry runs found R1
+(45780470849, 45784787236: SBOM generator broken by my dece6c6 — a real
+release would have failed at that step); fixed, and the release tooling now runs on every push.
+Dry run 45786770442: everything green, nothing published.
+
+**4. Reliability gaps.**
+- **W8 — root cause proven, fixed.** New occurrence in 45780449466 with
+  the Phase 12 logging: `connect-fail - connect: socket error 10048`.
+  Windows reports a non-blocking connect whose 4-tuple is still in
+  TIME_WAIT through SO_ERROR (WSAEADDRINUSE), not from `connect()`; only
+  the latter was retried (Phase 12's "ruled out by code" covered only the
+  synchronous path — that conclusion was wrong). `test_connect_retry`
+  creates the TIME_WAIT clash deliberately: on native Windows the
+  pre-fix code fails it ("failed (connect: socket error 10048)", positive
+  control in every CI run), the fixed code retries ("in use,
+  retryable"). macOS reports it synchronously (already handled); Linux
+  marks rather than binds its sockets.
+- **E3 — data race, fixed.** TSan (instrumented OpenSSL) reported
+  `dns_resolver_healthy()` reading health state without the resolver
+  lock; pre-existing, timing-dependent. Fixed; unit test fails without it.
+- **U4 — locking on all three platforms**, tested (see table).
+- **Windows elevation classification (W2)** — fixed, tested as shipped.
+- **L8 (systemd 259 `systemctl kill`) — open.** Reproducible in CI,
+  bounded (HTTPS back after the restart, ~3 s), real crashes unaffected.
+  The cause is in systemd (ExecStopPost not run after `systemctl kill`
+  there); I found no upstream change note explaining it, so it is not
+  classified as understood. Nothing in Nivyx was changed for it.
+- **U5** (silent Linux updater exit) found and fixed on the way.
+
+**5. Physical-device preparation.** docs/RELEASE-CHECKLIST.md: procedures,
+expected results, failure indicators, log collection, config/state checks,
+rollback and recovery per platform; CI-verified behaviour listed
+separately. **No physical-device test has been performed.**
 
 ## Phase 12 — blockers resolved
 
@@ -135,7 +226,7 @@ mode): Linux engine 113,312 B before and after, idle RSS 3.3 MB both.
 | ID | Sev | Finding | Status |
 |---|---|---|---|
 | W1 | P1 | `dpi-proxy.exe` opened from Explorer starts a plain SOCKS5 proxy (`src/main.c`, default mode) and does nothing visible | ✅ explains itself, no server started; terminal use unchanged (wine + CI) |
-| W2 | P1 | `Install/Uninstall Nivyx.cmd` drop the real exit code; UAC refusal exits 0; apostrophe in path breaks elevation | 🟡 exit codes 0/1/2/3/4/5/1223 passed through; CI e2e checks 2/3/4/0. UAC refusal itself cannot be automated ⛔ |
+| W2 | P1 | `Install/Uninstall Nivyx.cmd` drop the real exit code; UAC refusal exits 0; apostrophe in path breaks elevation | 🟡 exit codes 0/1/2/3/4/5/6/1223 passed through; CI e2e checks 2/3/4/0. Phase 13: every elevation failure used to become 1223 "declined"; now only Win32 error 1223 does, others exit 6 with the reason (CI runs the shipped command: missing target → 6, elevated exit 7 passes through). UAC refusal itself cannot be automated ⛔ |
 | W3 | P2 | `--service` from a terminal exits 1 silently | 🟡 message, exit 1063 |
 | W4 | P2 | WinDivertOpen failure logged without the reason | 🟡 Win32 error + hint (CI saw `error 193`) |
 | W5 | P1 | Failed Windows upgrade deletes the previous service, no rollback | 🟡 previous files + service restored (exit 4), exit 5 if even that fails |
@@ -158,16 +249,20 @@ mode): Linux engine 113,312 B before and after, idle RSS 3.3 MB both.
 | U1 | P1 | Updaters (all 3): fixed rollback dir and staging names; backup deleted even when rollback failed; man page/completions not in rollback | 🟡 unique dirs, kept on failure, full file set |
 | U2 | P2 | `NIVYX_RELEASE_API` accepts any URL | ✅ (Linux, local) 🟡 (macOS/Windows): only 127.0.0.1/localhost |
 | U3 | P2 | Linux/macOS updater extracts without checking members | ✅ links, `..`, foreign top folders refused (tested locally with crafted archives) |
-| U4 | P2 | No lock: concurrent install/update/repair/uninstall | 🟡 Linux `flock` (install, update, repair, uninstall); macOS lock dir (update only) |
+| U4 | P2 | No lock: concurrent install/update/repair/uninstall | 🟡 Phase 13: all three platforms lock install, update, repair and uninstall (Linux flock; macOS lock dir with pid, a dead owner's lock taken over by rename; Windows named mutex, released by Windows if the holder dies). Tested in all three e2e suites (another process holds the lock → refusals, service untouched → proceeds once released). Residual: on macOS two processes that both find the same dead owner at the same instant could both proceed (no flock(1) there) |
 | D1 | P2 | `status` "Active" from a stale status file / hung engine (Linux checked no PID; no platform checked the heartbeat) | ✅ Linux logic tested locally with stubs; 🟡 macOS/Windows |
 | S1 | P2 | SBOM: Windows OpenSSL `NOASSERTION`, Nivyx license `NOASSERTION`, Linux runtime OpenSSL missing | ✅ version read from the shipped exe (3.6.4 in v2.3.0) |
-| S2 | P3 | No updater-checked signature (SHA256SUMS comes from the same release) | ⛔ needs a project signing key; documented in docs/security.md |
-| C1 | P2 | CI upgrade tests only from v2.1.0; no old-updater test on Windows; no v2.3.0 baseline | 🟡 Windows: v2.1.0/v2.2.2/v2.3.0 upgrade + v2.2.2/v2.3.0 updaters; Linux: v2.3.0 updater |
+| S2 | P3 | No updater-checked signature (SHA256SUMS comes from the same release) | 🟡 Phase 13: implemented, **not enforced**: Ed25519 over a versioned manifest, checked by the installed engine in all three updaters (fail-closed, downgrade/substitution refused); enforced once the maintainer adds the offline key (docs/release-signing.md). No key generated |
+| C1 | P2 | CI upgrade tests only from v2.1.0; no old-updater test on Windows; no v2.3.0 baseline | 🟡 Windows: v2.1.0/v2.2.2/v2.3.0 upgrade + v2.2.2/v2.3.0 updaters; Linux: v2.2.2/v2.3.0 updaters; macOS (Phase 13): v2.2.2/v2.3.0 updaters on arm64 and Intel, incl. rollback |
 | C2 | P2 | Engine never run under sanitizers (only unit tests) | ✅ locally: SOCKS5 mode ASan/UBSan + TSan under load; 🟡 transparent mode in CI (`engine-sanitizers`) |
 | A1 | P3 | Linux arm64 | 🟡 CI build + unit + e2e on `ubuntu-24.04-arm`; no release asset (no package, updater says so) |
 | E2 | — | TSan data race reported inside libcrypto (DNS workers sharing the DoH `SSL_CTX`) | ✅ instrumentation artifact, proven (see Phase 12); TSan run links an instrumented OpenSSL; no suppression |
 | C3 | P3 | CI `macos-e2e (macos-14)` was cancelled unrun in every recent run (main too): GitHub retired the image, so macOS 14 had silently no coverage | removed from the matrix; docs say 15 and 26 (arm64) + 15 (Intel). macOS 11-14 are declared (minOS 11.0) but not tested |
 | T1 | P3 | `cmd | grep -q` under `pipefail` can report "no match" on SIGPIPE | fixed where it decides security (updater); other uses checked small outputs, left as is |
+| W8 | P1 | Windows: a connection now and then fails with "Connection was reset" right after the engine restarted (seen in 45723297716, v2.3.0 upgrade; not reproduced in 3 later runs) | ✅ Phase 13, root cause proven: the Phase 12 instrumentation logged `connect-fail - connect: socket error 10048` (45780449466). A non-blocking connect whose local-port + remote 4-tuple is still in TIME_WAIT is reported by Windows through SO_ERROR (WSAEADDRINUSE), and only the synchronous case was retried. Fixed (`src/transparent/net.c`); `test_connect_retry` reproduces it on native Windows (unfixed code: "failed (connect: socket error 10048)", positive control in CI; fixed: retried from the next port). macOS reports it synchronously (already retried), Linux does not bind its own ports |
+| E3 | P2 | Data race: `dns_resolver_healthy()` read the resolvers' health without the resolver lock while DNS workers updated it (status writer + forwarder workers) | ✅ Phase 13: found by TSan in CI (45778878182; pre-existing, timing-dependent: passed 3/3 before); fixed (lock taken); unit test fails without the fix; TSan run clean since |
+| U5 | P3 | Linux updater: a release lacking an expected file ended the updater silently (exit 1, no message) under `set -euo pipefail` | ✅ Phase 13, found by the signature test in CI; now reported ("is not signed", "has no <asset>"); pre-existing for a missing archive/SHA256SUMS |
+| R1 | P1 | Release workflow never executed; its SBOM step was broken (`NOW` unset since dece6c6): a tagged release would have failed after the whole matrix | ✅ Phase 13: found by the dry runs (45780470849, 45784787236), fixed; release tooling now runs in every CI push; dry run 45786770442 green |
 
 ## Decisions
 
@@ -185,6 +280,16 @@ mode): Linux engine 113,312 B before and after, idle RSS 3.3 MB both.
 
 ## Local verification (this machine, no root)
 
+Phase 13 (this machine): `make re`, `make test` (16 suites incl.
+test_connect_retry), `make sanitize`; `release-verify-test.sh` plain and
+with an ASan/UBSan engine (20/20, no report); 4000 mutated signature /
+keyring files against the ASan engine (0 reports); the Linux and macOS
+updaters' signature functions run against the 8 mock releases under
+bash `-euo pipefail`, dash and `bash --posix` (all cases as expected);
+shellcheck 0.10.0 on every script CI checks; mutation checks: without
+`OPENSSL_INIT_NO_LOAD_CONFIG` the hostile-config case fails, without the
+E3 fix test_dns fails. Everything that needs root, macOS or Windows: CI.
+
 - `make re`, `make test`: 13/13 suites OK. `make sanitize` (ASan+UBSan): 13/13 OK.
 - Parser fuzzing (gcc + ASan/UBSan, mutation, no libFuzzer available):
   150 000 000 iterations over TLS ClientHello/SNI, record split/fragment,
@@ -200,28 +305,34 @@ mode): Linux engine 113,312 B before and after, idle RSS 3.3 MB both.
   Windows/macOS) → CI; Windows build (no cross compiler; installing one
   was declined) → CI.
 
-## Remaining limitations and blockers (end of Phase 12)
+## Remaining limitations and blockers (end of Phase 13)
 
-- **W8** (Windows v2.3.0 upgrade connect-fail, run 45723297716): not
-  reproduced in 3 later runs; root cause not proven. The OS reason is now
-  logged and the tests print attribution evidence if it recurs.
-- **Release workflow not executed**: it runs only on a tag, and no tag was
-  created. Its Windows job now builds OpenSSL from source (first build
-  ~10 min, then cached); exercised so far only through the identical
-  steps in `build.yml`.
-- **macOS old-updater compatibility** (v2.2.x/v2.3.0's own `nivyx update`
-  installing the new package) is not tested in CI; the package layout it
-  requires (`dpi-proxy`, `nivyx` at the top) is unchanged. Windows and
-  Linux have that test.
-- **Updater authenticity** rests on SHA256SUMS from the same release
-  (S5); a signing key and process are a maintainer decision.
-- **Fail-open after `systemctl kill`** on systemd 259 lasts until the
-  restart (measured: HTTPS back after 3 s); real crashes are unaffected (L8).
-- **OpenSSL 4 distributions** (Fedora 45+, Arch) can install from source
-  (CI-verified build) but get no prebuilt update package (L7).
-- **No physical-device validation** of any change in this branch.
+Resolved in Phase 13 (evidence above): W8 (root cause proven, fixed,
+reproduced on Windows), release workflow executed as a dry run (R1 fixed),
+macOS old-updater compatibility tested, cross-platform locking (U4),
+Windows elevation classification, the E3 data race, U5.
+
+Still open:
+- **Release signing not enforced** (maintainer action): no production key
+  exists; until `scripts/release-keys.txt` holds one, updates rely on
+  `SHA256SUMS` from the same release (S2). Procedure: docs/release-signing.md.
+- **Publishing path not executed**: the dry run exercised everything
+  except `publish` (a pushed tag); `gh release create` itself, the draft
+  mode and the offline signing ceremony have never run.
+- **L8** `systemctl kill` on systemd 259: ~3 s of refused HTTPS until the
+  restart; cause in systemd not identified; real crashes unaffected.
+- **macOS lock** (U4 residual): two processes finding the same dead owner
+  at the same instant could both proceed (no flock(1) on macOS).
+- **OpenSSL 4 distributions** (Fedora 45+, Arch): source install only, no
+  update package (L7).
+- **UAC and Gatekeeper prompts, antivirus, macOS 11-14**: not testable in
+  CI.
+- **No physical-device validation** of any change in this branch: see
+  docs/RELEASE-CHECKLIST.md (nothing in it has been performed).
 
 ### Physical-device tests still required before a release
+
+Full procedures: docs/RELEASE-CHECKLIST.md. Summary:
 
 - Windows 10 and 11 (consumer PCs, Defender on, a third-party antivirus):
   double-click install, UAC decline, run from inside the ZIP, damaged
@@ -244,3 +355,12 @@ DNS), dece6c6 (Windows OpenSSL pinned, SBOM check), 979f8cf (readiness
 waits, connect-fail reason, CI), 2de4a5a, 630dd25 (repair start-limit
 fix; config test on real Windows, wine claim corrected).
 
+
+Phase 13: afa37e5 (engine signature check, release tooling), 2487fbf
+(updaters: signed manifest), e59a4f7 (U4 locking + tests), 3834493
+(elevation classification), 434aba6 (macOS old-updater tests, release dry
+run), a0931f3 (U5), b24f35c (test fixes), 8278452 (docs: signing,
+checklist), 0810a4f (E3 data race), 75b6707 (test fix), 55fab4a (W8 fix +
+regression test), be31de8 (W8 control), c74b475 (docs), 38e93a2 (R1 SBOM
+fix; release tooling in CI). Verified state: 38e93a2 — build 45786750460
+34/34, release dry run 45786770442 41/42 (publish skipped by design).
