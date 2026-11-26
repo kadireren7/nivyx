@@ -20,7 +20,7 @@ nivyx status --verbose    # full internals (engine, DNS, flows, PF/nft state, ..
 The default output is meant to be read at a glance:
 
 ```
-Nivyx 2.3.1
+Nivyx 2.4.0
 Service: Running
 Protection: Active
 DNS: Healthy
@@ -160,7 +160,7 @@ installer. Exit status 1 if something remains that it cannot fix.
 ```
 $ nivyx update --check
 Current: 2.2.0
-Latest:  2.3.1
+Latest:  2.4.0
 Update available.
 ```
 

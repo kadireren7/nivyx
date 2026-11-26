@@ -82,7 +82,14 @@ SPDX SBOM, a release manifest and signed build provenance (`gh
 attestation verify <file> --repo kadireren7/nivyx`). `nivyx update` is
 prepared to require the maintainer's offline signature on that manifest
 (docs/release-signing.md); it is not enforced yet because no signing key
-has been set up. Piping a downloaded script into a root shell
+has been set up; updates are verified with SHA-256 against
+`SHA256SUMS`.
+
+**Testing status:** releases are tested automatically on GitHub-hosted
+Linux, macOS and Windows machines (install, upgrade, update, rollback,
+repair, uninstall). They have **not yet been validated on physical
+consumer devices** (real PCs and Macs with antivirus, Raspberry Pi, real
+DPI networks); see docs/RELEASE-CHECKLIST.md. Piping a downloaded script into a root shell
 is deliberately not offered: the Linux installer builds from the source
 you cloned, so you can read what it runs.
 
@@ -96,7 +103,8 @@ Most people need just one file: the Windows ZIP, or the macOS ZIP for their Mac.
 | `nivyx-macos-arm64.zip` | Apple silicon Macs |
 | `nivyx-macos-x86_64.zip` | Intel Macs |
 | `SHA256SUMS` | SHA-256 integrity verification |
-| `nivyx-2.2.x.spdx.json` | SBOM / dependency inventory |
+| `nivyx-<version>.spdx.json` | SBOM / dependency inventory |
+| `nivyx-release.manifest` | version and SHA-256 of every release file (prepared for signed updates) |
 
 A Linux archive (`nivyx-linux-x86_64.tar.gz`) is also attached; it exists only for `nivyx update` and is not an installer.
 
@@ -111,7 +119,7 @@ One command, the same on every platform (`start`/`stop`/`restart`/
 
 ```
 $ nivyx status
-Nivyx 2.3.1
+Nivyx 2.4.0
 Service: Running
 Protection: Active
 DNS: Healthy
