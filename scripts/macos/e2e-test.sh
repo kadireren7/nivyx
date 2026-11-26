@@ -107,7 +107,7 @@ stepn "one install/update/repair/uninstall at a time (U4)"
 # leaves the install alone; a dead holder's lock is taken over
 sleep 120 &
 holder=$!
-sudo mkdir /var/run/nivyx-admin.lock && echo "$holder" | sudo tee /var/run/nivyx-admin.lock/pid >/dev/null
+sudo ln -s "$holder" /var/run/nivyx-admin.lock
 p0="$(daemon_pid)"
 for what in repair uninstall install; do
 	case "$what" in
@@ -122,7 +122,7 @@ done
 	|| die "a refused operation touched the install"
 kill "$holder"; wait "$holder" 2>/dev/null
 out="$(sudo /usr/local/bin/nivyx repair 2>&1)" || { echo "$out"; die "repair did not take over the lock of a finished holder"; }
-[ ! -e /var/run/nivyx-admin.lock ] || die "repair left the lock behind"
+[ ! -e /var/run/nivyx-admin.lock ] && [ ! -L /var/run/nivyx-admin.lock ] || die "repair left the lock behind"
 pass "refused while held (install untouched); a dead holder's lock is taken over and released"
 
 stepn "PF: enabled, our anchor loaded, main ruleset untouched, watchdog up"

@@ -81,7 +81,7 @@ no_leftovers() {
 	[ -z "$(ls -d /private/var/tmp/nivyx-update.* 2>/dev/null)" ] || die "$1: a download folder was left behind"
 	[ -z "$(sudo sh -c 'ls -d /usr/local/var/dpi-proxy/update-rollback.* /usr/local/var/dpi-proxy/rollback 2>/dev/null')" ] \
 		|| die "$1: a rollback folder was left behind"
-	[ ! -e /var/run/nivyx-admin.lock ] || die "$1: the update lock was left behind"
+	[ ! -e /var/run/nivyx-admin.lock ] && [ ! -L /var/run/nivyx-admin.lock ] || die "$1: the update lock was left behind"
 }
 
 # serve a folder (asset, SHA256SUMS, ...) as "the latest release" <tag>

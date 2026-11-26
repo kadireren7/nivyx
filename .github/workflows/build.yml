@@ -138,7 +138,7 @@ jobs:
           scripts/release-verify-test.sh scripts/signed-release-cases.sh
           scripts/update-signature-test-linux.sh
       # the macOS scripts are POSIX sh (macOS /bin/sh)
-      - run: shellcheck -s sh -S warning -e SC1007,SC2034 scripts/macos/nivyx scripts/macos/update-test.sh
+      - run: shellcheck -s sh -S warning -e SC1007,SC2034 scripts/macos/nivyx scripts/macos/update-test.sh scripts/macos/lock-race-test.sh scripts/macos/install.sh scripts/macos/uninstall.sh
 
   install-deps:
     # the installer's Debian/Ubuntu dependency auto-install, in clean containers
@@ -252,6 +252,15 @@ jobs:
           path: nivyx-macos-${{ matrix.arch }}.zip
       - name: release signature check (engine, temporary test keys)
         run: OPENSSL="$(brew --prefix openssl@3)/bin/openssl" ./scripts/release-verify-test.sh ./dpi-proxy
+      # the admin lock under contention; positive control: the lock of
+      # 5d572af (stale-takeover race) must fail the same test
+      - name: admin lock race test (+ control)
+        run: |
+          sh scripts/macos/lock-race-test.sh scripts/macos/nivyx 40
+          curl -fsSL -o "$RUNNER_TEMP/old-nivyx" https://raw.githubusercontent.com/kadireren7/nivyx/5d572af/scripts/macos/nivyx
+          if CONTROL=1 sh scripts/macos/lock-race-test.sh "$RUNNER_TEMP/old-nivyx" 20; then
+            echo "the old lock passed: the test does not reproduce the race here"; exit 1
+          fi
       # a 99.0.0 build of the same tree and the signed/tampered releases made
       # from it, for the updater signature test (macos-update)
       - name: signature test releases (99.0.0, temporary test keys)
