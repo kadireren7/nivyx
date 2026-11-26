@@ -34,6 +34,37 @@ log() { printf '==> %s\n' "$1"; }
 [ "$(uname -s)" = Darwin ] || { echo "uninstall.sh: this is for macOS" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || { echo "uninstall.sh: run it with sudo:  sudo ./uninstall.sh" >&2; exit 1; }
 
+# One install/update/repair/uninstall at a time: install.sh, uninstall.sh
+# and nivyx update/repair share this lock (macOS has no flock(1)): a
+# directory holding the owner's pid. A lock whose owner is gone is taken
+# over; one that was just created and has no pid yet is waited for.
+ADMIN_LOCK=/var/run/nivyx-admin.lock
+ADMIN_LOCK_HELD=0
+take_admin_lock() {
+	_tries=0
+	while ! mkdir "$ADMIN_LOCK" 2>/dev/null; do
+		_tries=$((_tries + 1))
+		[ "$_tries" -le 25 ] || { echo "could not take $ADMIN_LOCK" >&2; exit 1; }
+		_owner="$(cat "$ADMIN_LOCK/pid" 2>/dev/null || true)"
+		if [ -z "$_owner" ] && [ "$_tries" -le 10 ]; then sleep 0.2; continue; fi
+		if [ -n "$_owner" ] && kill -0 "$_owner" 2>/dev/null; then
+			echo "another Nivyx install, update, repair or uninstall is running (pid $_owner); try again when it has finished" >&2
+			exit 1
+		fi
+		# the owner is gone: move its lock aside (a rename: only one taker wins)
+		mv "$ADMIN_LOCK" "$ADMIN_LOCK.stale.$$" 2>/dev/null && rm -rf "$ADMIN_LOCK.stale.$$"
+	done
+	echo $$ >"$ADMIN_LOCK/pid"
+	ADMIN_LOCK_HELD=1
+}
+release_admin_lock() {
+	[ "$ADMIN_LOCK_HELD" = 1 ] || return 0
+	[ "$(cat "$ADMIN_LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$ADMIN_LOCK"
+	ADMIN_LOCK_HELD=0
+}
+take_admin_lock
+trap release_admin_lock EXIT
+
 log "Stopping the service..."
 if launchctl print "system/$LABEL" >/dev/null 2>&1; then
 	launchctl bootout "system/$LABEL" 2>/dev/null || true

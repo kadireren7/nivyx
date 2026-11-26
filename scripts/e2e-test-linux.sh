@@ -72,6 +72,30 @@ sudo nft list table inet dpi_proxy_tp >/dev/null 2>&1 || die "the interception t
 c="$(fetch https://example.com/)"; ok "$c" || die "after a failed build -> '$c'"
 pass "exit 3; same engine process ($pid0), table and binary; HTTPS $c"
 
+stepn "one install/update/repair/uninstall at a time (U4)"
+# another administrative operation holds the lock: every other one refuses
+# and leaves the running install alone; once it is released they work again
+sudo flock /run/nivyx-admin.lock sleep 120 &
+holder=$!
+for i in $(seq 1 25); do sudo flock -n /run/nivyx-admin.lock true 2>/dev/null || break; sleep 0.2; done
+pid0="$(systemctl show -p MainPID --value nivyx)"
+for what in "nivyx repair" "uninstall.sh" "install.sh"; do
+	case "$what" in
+	"nivyx repair") rc=0; out="$(sudo nivyx repair 2>&1)" || rc=$? ;;
+	uninstall.sh) rc=0; out="$(sudo "$ROOT/scripts/uninstall.sh" 2>&1)" || rc=$? ;;
+	install.sh) rc=0; out="$(sudo "$ROOT/scripts/install.sh" 2>&1)" || rc=$? ;;
+	esac
+	[ "$rc" != 0 ] || { echo "$out"; die "$what ran while another operation held the lock"; }
+	grep -q 'another Nivyx install, update, repair or uninstall is running' <<<"$out" || { echo "$out"; die "$what: no lock message"; }
+done
+systemctl is-active --quiet nivyx && [ "$(systemctl show -p MainPID --value nivyx)" = "$pid0" ] \
+	|| die "a refused operation touched the service"
+[ -x /usr/local/bin/nivyx-engine ] && [ -f /etc/systemd/system/nivyx.service ] || die "a refused operation removed files"
+sudo pkill -f 'flock /run/nivyx-admin.lock sleep 120' || true
+wait "$holder" 2>/dev/null || true
+out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "repair failed after the lock was released"; }
+pass "repair, uninstall and install refused while locked (service untouched); repair works once released"
+
 stepn "a reinstall that fails its health check restores the previous install"
 unit0="$(sha /etc/systemd/system/nivyx.service)"
 cli0="$(sha /usr/local/bin/nivyx)"

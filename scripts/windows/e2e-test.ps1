@@ -153,6 +153,39 @@ Assert-NotInstalled 'a launcher without its package'
 Remove-Item $lone -Recurse -Force
 Pass 'exit 3, nothing installed'
 
+Step 'launchers: elevation failures are classified (1223 only for a declined prompt)'
+# The elevation command exactly as shipped in each launcher (the UAC prompt
+# itself cannot be answered in CI: that needs a physical test). A target
+# Windows cannot start must not be reported as "declined"; the elevated
+# process's exit code must come back unchanged.
+function Run-Elevation([string]$code) {
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+    $p = Start-Process -PassThru -NoNewWindow powershell -ArgumentList '-NoProfile', '-EncodedCommand', $enc `
+        -RedirectStandardError (Join-Path $env:TEMP "nivyx-elev-err-$PID.txt")
+    if (-not $p.WaitForExit(60000)) { $p.Kill(); Die 'the elevation command hung (a UAC prompt on this machine?)' }
+    return $p.ExitCode
+}
+$exit7 = Join-Path $env:TEMP "nivyx-exit7-$PID.cmd"
+Set-Content -Encoding ASCII $exit7 '@exit /b 7'
+foreach ($launcher in 'Install Nivyx.cmd', 'Uninstall Nivyx.cmd') {
+    $line = @(Get-Content (Join-Path $Package $launcher) | Where-Object { $_ -match 'Start-Process -FilePath \$env:NIVYX_SELF' })
+    if ($line.Count -ne 1) { Die "${launcher}: elevation command not found" }
+    $line = $line[0].Trim()
+    if (-not ($line.StartsWith('"') -and $line.EndsWith('"'))) { Die "${launcher}: unexpected elevation line: $line" }
+    $code = $line.Substring(1, $line.Length - 2)
+    $env:NIVYX_DIR = $env:TEMP
+    $env:NIVYX_SELF = Join-Path $env:TEMP 'nivyx-no-such-file.cmd'
+    $rc = Run-Elevation $code
+    $err = Get-Content (Join-Path $env:TEMP "nivyx-elev-err-$PID.txt") -Raw
+    if ($rc -ne 6) { Die "${launcher}: elevating a missing file exited $rc (expected 6; 1223 would claim the prompt was declined)" }
+    if ($err -notmatch 'could not start the elevated') { Die "${launcher}: no reason printed: $err" }
+    $env:NIVYX_SELF = $exit7
+    $rc = Run-Elevation $code
+    if ($rc -ne 7) { Die "${launcher}: exit code through elevation $rc (expected 7)" }
+}
+Remove-Item Env:\NIVYX_SELF, Env:\NIVYX_DIR, $exit7 -ErrorAction SilentlyContinue
+Pass 'a failed elevation exits 6 with the reason, not 1223; the elevated exit code passes through'
+
 Step 'launcher: damaged package (driver file missing)'
 $bad = Join-Path $env:TEMP "nivyx-e2e-bad-$PID"
 Copy-Item $Package $bad -Recurse
@@ -185,6 +218,44 @@ Step 'install (install.ps1 directly, over the existing install)'
 if ($LASTEXITCODE -ne 0) { Die "install.ps1 exited $LASTEXITCODE" }
 if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service not running' }
 Pass 'installed; service running; installer health check (DNS + HTTPS through it) passed'
+
+Step 'one install/update/repair/uninstall at a time (U4)'
+# another process holds the lock: every operation refuses and leaves the
+# install alone; when the holder dies (abandoned lock) the next one proceeds
+$hold = '$m = New-Object System.Threading.Mutex($false, "Global\NivyxAdminLock"); [void]$m.WaitOne(); Start-Sleep -Seconds 120'
+$holder = Start-Process -PassThru -WindowStyle Hidden powershell -ArgumentList '-NoProfile', '-EncodedCommand',
+    ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($hold)))
+$held = $false
+foreach ($i in 1..40) {
+    $t = New-Object System.Threading.Mutex($false, 'Global\NivyxAdminLock')
+    $free = $false
+    try { $free = $t.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $free = $true }
+    if ($free) { $t.ReleaseMutex() } else { $held = $true }
+    $t.Dispose()
+    if ($held) { break }
+    Start-Sleep -Milliseconds 250
+}
+if (-not $held) { Die 'the test holder never took the lock' }
+$svcPid = (Get-CimInstance Win32_Service -Filter "Name='dpi-proxy'").ProcessId
+$nvc = Join-Path $InstDir 'nivyx.cmd'
+foreach ($what in 'repair', 'uninstall', 'install') {
+    switch ($what) {
+        'repair' { $o = (& $nvc repair 2>&1 | Out-String) }
+        'uninstall' { $o = (& powershell -ExecutionPolicy Bypass -File (Join-Path $Package 'uninstall.ps1') 2>&1 | Out-String) }
+        'install' { $o = (& powershell -ExecutionPolicy Bypass -File (Join-Path $Package 'install.ps1') 2>&1 | Out-String) }
+    }
+    $rc = $LASTEXITCODE
+    if ($rc -eq 0) { Write-Host $o; Die "$what ran while another operation held the lock" }
+    if ($o -notmatch 'another Nivyx install, update, repair or uninstall is running') { Write-Host $o; Die "${what}: no lock message" }
+}
+if ((Get-CimInstance Win32_Service -Filter "Name='dpi-proxy'").ProcessId -ne $svcPid -or -not (Test-Path (Join-Path $InstDir 'dpi-proxy.exe'))) {
+    Die 'a refused operation touched the install'
+}
+Stop-Process -Id $holder.Id -Force
+$holder.WaitForExit()
+$o = (& $nvc repair 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0) { Write-Host $o; Die 'repair did not proceed after the holder died (abandoned lock)' }
+Pass 'repair, uninstall and install refused while locked (service untouched); proceeds after the holder died'
 
 Step 'a reinstall that fails puts the previous version back'
 $sysHash = (Get-FileHash (Join-Path $InstDir 'WinDivert64.sys')).Hash

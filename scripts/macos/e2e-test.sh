@@ -102,6 +102,29 @@ wait_running || die "service not running after install"
 command -v nivyx >/dev/null || die "nivyx is not on the PATH"
 pass "installed; launchd job running (pid $(daemon_pid)); installer health check passed"
 
+stepn "one install/update/repair/uninstall at a time (U4)"
+# a live holder (pid of a running process): every operation refuses and
+# leaves the install alone; a dead holder's lock is taken over
+sleep 120 &
+holder=$!
+sudo mkdir /var/run/nivyx-admin.lock && echo "$holder" | sudo tee /var/run/nivyx-admin.lock/pid >/dev/null
+p0="$(daemon_pid)"
+for what in repair uninstall install; do
+	case "$what" in
+	repair) out="$(sudo /usr/local/bin/nivyx repair 2>&1)"; rc=$? ;;
+	uninstall) out="$(cd "$PKG" && sudo ./uninstall.sh 2>&1)"; rc=$? ;;
+	install) out="$(cd "$PKG" && sudo ./install.sh 2>&1)"; rc=$? ;;
+	esac
+	[ "$rc" != 0 ] || { echo "$out"; die "$what ran while another operation held the lock"; }
+	echo "$out" | grep -q 'another Nivyx install, update, repair or uninstall is running' || { echo "$out"; die "$what: no lock message"; }
+done
+[ "$(daemon_pid)" = "$p0" ] && [ -f "/Library/LaunchDaemons/$LABEL.plist" ] && [ -x /usr/local/bin/dpi-proxy ] \
+	|| die "a refused operation touched the install"
+kill "$holder"; wait "$holder" 2>/dev/null
+out="$(sudo /usr/local/bin/nivyx repair 2>&1)" || { echo "$out"; die "repair did not take over the lock of a finished holder"; }
+[ ! -e /var/run/nivyx-admin.lock ] || die "repair left the lock behind"
+pass "refused while held (install untouched); a dead holder's lock is taken over and released"
+
 stepn "PF: enabled, our anchor loaded, main ruleset untouched, watchdog up"
 [ "$(sudo pfctl -s info | sed -n 's/^Status: \([A-Za-z]*\).*/\1/p')" = Enabled ] || die "PF not enabled"
 sudo pfctl -a "$ANCHOR" -s nat

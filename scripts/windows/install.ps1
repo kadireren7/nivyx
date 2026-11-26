@@ -47,6 +47,20 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit 1
 }
 
+# One install/update/repair/uninstall at a time (install.ps1, uninstall.ps1,
+# nivyx update and repair share it): a machine-wide named mutex. Windows
+# releases it when its holder exits, also when the holder crashes.
+function Enter-AdminLock([string]$who) {
+    $script:AdminLock = New-Object System.Threading.Mutex($false, 'Global\NivyxAdminLock')
+    $got = $false
+    try { $got = $script:AdminLock.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+    if (-not $got) {
+        Write-Host "${who}another Nivyx install, update, repair or uninstall is running; try again when it has finished"
+        exit 1
+    }
+}
+Enter-AdminLock '[install] ERROR: '
+
 # Files come from the release folder (next to this script) or, in a
 # source checkout, from the repository root.
 $need = 'dpi-proxy.exe', 'WinDivert.dll', 'WinDivert64.sys'
