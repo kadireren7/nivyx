@@ -41,6 +41,17 @@ jobs:
         run: ./scripts/release-verify-test.sh
       - name: the updaters carry the keys of scripts/release-keys.txt
         run: ./scripts/release-keys.sh check
+      # the release workflow's SBOM and manifest steps, on stand-in files
+      # (a broken generator otherwise shows only when a release runs)
+      - name: release tooling (SBOM, manifest) produces valid output
+        run: |
+          d="$(mktemp -d)"
+          for f in nivyx-linux-x86_64.tar.gz nivyx-macos-arm64.zip nivyx-macos-x86_64.zip; do head -c 64 /dev/urandom >"$d/$f"; done
+          v="$(cat VERSION)"
+          ./scripts/gen-sbom.sh "$v" "$d" >"$d/nivyx-$v.spdx.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["spdxVersion"]=="SPDX-2.3" and d["creationInfo"]["created"] and len(d["files"])==3' "$d/nivyx-$v.spdx.json"
+          ./scripts/release-manifest.sh "$v" "$d" >"$d/nivyx-release.manifest"
+          ./scripts/release-sign.sh check "$d" "$v"
 
   linux-package:
     # The update package is built on the oldest supported baseline

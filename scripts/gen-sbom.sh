@@ -15,6 +15,7 @@ OPENSSL_SHA="$(pin "$ROOT/scripts/macos/build-openssl.sh" SHA256)"
 WD_VERSION="$(pin "$ROOT/scripts/windows/fetch-windivert.sh" VERSION)"
 WD_SHA="$(pin "$ROOT/scripts/windows/fetch-windivert.sh" SHA256)"
 COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo NOASSERTION)"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # Windows links the same pinned OpenSSL source as macOS (scripts/windows/
 # build-openssl.sh). The version embedded in the shipped engine must be that
 # pin: the SBOM states what is really inside, or the release stops here.
