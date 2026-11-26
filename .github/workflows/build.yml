@@ -33,6 +33,8 @@ jobs:
         run: ./scripts/parity-test.sh
       - name: support-bundle redaction
         run: ./scripts/redaction-test.sh
+      - name: TLS certificate and hostname verification (local endpoints)
+        run: ./scripts/tls-verify-test.sh
 
   linux-package:
     # The update package is built on the oldest supported baseline
@@ -114,6 +116,7 @@ jobs:
           scripts/install-deps-test.sh scripts/update-compat-test-linux.sh
           scripts/upgrade-test-linux.sh scripts/gen-sbom.sh scripts/e2e-test-linux.sh
           scripts/check-linux-package.sh scripts/sanitize-engine-linux.sh
+          scripts/tls-verify-test.sh scripts/build-openssl-tsan.sh
 
   install-deps:
     # the installer's Debian/Ubuntu dependency auto-install, in clean containers
@@ -135,7 +138,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev nftables
-      - run: ./scripts/sanitize-engine-linux.sh
+      # TSan-instrumented OpenSSL for the TSan run (pinned source, cached)
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/openssl-tsan
+          key: openssl-tsan-3.5.5-${{ runner.os }}-${{ runner.arch }}-v1
+      - run: ./scripts/sanitize-engine-linux.sh "$RUNNER_TEMP/openssl-tsan"
 
   packet-mode-compile:
     # Real compile+link against real system dev headers, unlike the
@@ -267,16 +275,30 @@ jobs:
         with:
           msystem: MINGW64
           install: >-
-            mingw-w64-x86_64-gcc mingw-w64-x86_64-openssl make curl unzip
+            mingw-w64-x86_64-gcc make perl curl unzip
       - name: WinDivert SDK (pinned SHA-256)
         run: ./scripts/windows/fetch-windivert.sh
-      - run: make windows CC_WIN=gcc OPENSSL_WIN_PREFIX=/mingw64
+      # OpenSSL from the pinned official source (scripts/windows/build-openssl.sh),
+      # not the MSYS2 package current on the build day; cached
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/openssl-win
+          key: openssl-win-${{ hashFiles('scripts/macos/build-openssl.sh', 'scripts/windows/build-openssl.sh') }}-v1
+      - name: OpenSSL (pinned, static)
+        run: ./scripts/windows/build-openssl.sh "$(cygpath -u "$RUNNER_TEMP")/openssl-win"
+      - run: make windows CC_WIN=gcc OPENSSL_WIN_PREFIX="$(cygpath -u "$RUNNER_TEMP")/openssl-win"
       - name: unit tests (shared core, native Windows)
         run: |
-          make windows-tests CC_WIN=gcc OPENSSL_WIN_PREFIX=/mingw64
+          make windows-tests CC_WIN=gcc OPENSSL_WIN_PREFIX="$(cygpath -u "$RUNNER_TEMP")/openssl-win"
           for t in tests/unit/test_*.exe; do ./$t; done
       - name: package
         run: ./scripts/windows/package.sh dist
+      - name: the engine embeds the pinned OpenSSL, with absolute directories
+        run: |
+          v="$(sed -n 's/^VERSION=//p' scripts/macos/build-openssl.sh)"
+          strings dist/dpi-proxy.exe | grep -q "^OpenSSL $v " || { echo "dpi-proxy.exe is not built with OpenSSL $v"; exit 1; }
+          strings dist/dpi-proxy.exe | grep -E '^(OPENSSLDIR|MODULESDIR):'
+          ! strings dist/dpi-proxy.exe | grep -qE '^(OPENSSLDIR|MODULESDIR): "/'
       - name: SOCKS5 smoke test
         run: |
           ./dist/dpi-proxy.exe &
@@ -307,6 +329,7 @@ jobs:
       - name: transparent mode is built in
         run: |
           ./dpi-proxy --capabilities | grep -q '^transparent_mode: supported'
+      - run: ./scripts/tls-verify-test.sh
       - run: ./scripts/e2e-test-linux.sh
 
   linux-upgrade:

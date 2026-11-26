@@ -22,6 +22,20 @@ die() {
 }
 field() { sed -n "s/^$1: //p" "$STATUS" | head -n 1; }
 wait_status() { sleep 11; }	# status is rewritten every 10 s
+# Ready = systemd runs the service and the engine it started reported
+# "running" (the status file carries that process's pid). Bounded: 30 s.
+engine_ready() {
+	local i pid
+	for i in $(seq 1 60); do
+		pid="$(systemctl show -p MainPID --value nivyx 2>/dev/null || true)"
+		if systemctl is-active --quiet nivyx && [ -n "$pid" ] && [ "$pid" != 0 ] \
+			&& grep -qx "pid: $pid" "$STATUS" 2>/dev/null && grep -q '^engine: running' "$STATUS" 2>/dev/null; then
+			return 0
+		fi
+		sleep 0.5
+	done
+	return 1
+}
 fetch() { curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$1" 2>&1 || true; }
 ok() { [[ "$1" =~ ^[23][0-9][0-9]$ ]]; }
 
@@ -105,7 +119,7 @@ pass "5 requests -> $delta flows"
 stepn "bypass path: forced tlsrec rule for example.com"
 printf '\n[domains]\nexample.com = tlsrec\n' | sudo tee -a "$CONF" >/dev/null
 sudo systemctl restart nivyx
-sleep 3
+engine_ready || die "not ready after restart"
 c="$(fetch https://example.com/)"; ok "$c" || die "example.com with tlsrec -> '$c'"
 wait_status
 [ "$(field bypassed)" -ge 1 ] || die "bypassed=$(field bypassed)"
@@ -119,7 +133,7 @@ pass "stopped: table gone, HTTPS $c"
 
 stepn "crash = fail-open, then automatic restart"
 sudo systemctl start nivyx
-sleep 3
+engine_ready || die "not ready after start"
 # A crash as it really happens (SIGSEGV, OOM killer, kill -9): the signal
 # comes from outside systemd. (`systemctl kill` is not that: systemd 259 -
 # Ubuntu 26.04 - then skips ExecStopPost, and the table stays until the
@@ -156,7 +170,7 @@ if ! ok "$c"; then
 fi
 for _ in $(seq 1 20); do systemctl is-active --quiet nivyx && break; sleep 1; done
 systemctl is-active --quiet nivyx || die "not restarted"
-sleep 3
+engine_ready || die "not ready after the automatic restart"
 c="$(fetch https://example.com/)"; ok "$c" || die "after restart -> '$c'"
 # systemctl kill: whatever systemd does with ExecStopPost, HTTPS must work
 # again by the time the automatic restart has happened (RestartSec=2)
@@ -169,6 +183,8 @@ for i in 1 2 3 4 5 6 7 8; do
 done
 [ -n "$ok_after" ] || die "HTTPS still failing 8 s after systemctl kill -> '$c'"
 echo "after systemctl kill: HTTPS works again after ${ok_after}s"
+# the next steps need the engine back, not only working (fail-open) HTTPS
+engine_ready || die "not ready again after systemctl kill"
 pass "killed: fail-open, restarted, HTTPS $c"
 
 stepn "nivyx commands"
@@ -245,11 +261,11 @@ sudo cp -p /tmp/nivyx-conf.orig "$CONF"
 sudo systemctl reload nivyx
 # a corrupt config must never stop the service or the internet
 printf 'garbage line\n[nonsense]\nx = y\n' | sudo tee -a "$CONF" >/dev/null
-sudo systemctl restart nivyx; sleep 3
+sudo systemctl restart nivyx; engine_ready || die "not ready after restart"
 systemctl is-active --quiet nivyx || die "the service does not start with a corrupt config"
 c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS with a corrupt config -> '$c'"
 sudo cp -p /tmp/nivyx-conf.orig "$CONF"
-sudo systemctl restart nivyx; sleep 3
+sudo systemctl restart nivyx; engine_ready || die "not ready after restart"
 pass "stats/config/diagnose/help behave; manual config preserved; a corrupt config does not stop the service"
 
 stepn "repair: nothing wrong on a healthy install"
@@ -279,7 +295,7 @@ stepn "repair: damaged learned-decision file"
 sudo systemctl stop nivyx
 printf '# header\nbroken line\nexample.org %s 4 tlsrec original 1790000000\n' "0123456789abcdef" | sudo tee /var/lib/nivyx/tp-decisions.conf >/dev/null
 # the engine itself must start with the damaged file (fail-safe, not fail-closed)
-sudo systemctl start nivyx; sleep 3
+sudo systemctl start nivyx; engine_ready || die "not ready after start"
 systemctl is-active --quiet nivyx || die "the engine does not start with a damaged decision file"
 c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS with a damaged decision file -> '$c'"
 sudo systemctl stop nivyx

@@ -39,6 +39,40 @@ function Field($name) {
     if ($m) { return $m.Matches[0].Groups[1].Value } else { return '' }
 }
 function Fetch($url) { return "$(& curl.exe -sS -o NUL -w '%{http_code}' --max-time 20 $url 2>&1)" }
+# Ready = the service runs and the engine it started reported "running"
+# (the status file carries that process's pid). Bounded: 30 s.
+function Wait-Ready {
+    foreach ($i in 1..60) {
+        $w = Get-CimInstance Win32_Service -Filter "Name='dpi-proxy'" -ErrorAction SilentlyContinue
+        if ($w -and $w.State -eq 'Running' -and $w.ProcessId -and (Test-Path $StatusFile) -and
+            (Select-String -Path $StatusFile -Pattern "^pid: $($w.ProcessId)$" -Quiet) -and
+            (Select-String -Path $StatusFile -Pattern '^engine: running' -Quiet)) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+# the next heartbeat rewrite of the status file (every 10 s); bounded: 25 s
+function Wait-Heartbeat {
+    $u0 = Field updated
+    foreach ($i in 1..50) { Start-Sleep -Milliseconds 500; if ((Field updated) -ne $u0) { return } }
+}
+# What a failed HTTPS check through the engine looked like: the engine's
+# own reason, a direct probe that does not go through Nivyx (only TCP 443
+# and DNS are intercepted), and the engine's local port range.
+function Https-Evidence([string]$url) {
+    Write-Host '--- HTTPS failure evidence ---'
+    if (Test-Path $LogFile) { Get-Content $LogFile -Tail 15 | Where-Object { $_ -match '\[fail\]|\[verify\]|cannot' } | ForEach-Object { Write-Host "engine: $_" } }
+    $h = ([uri]$url).Host
+    Write-Host "direct http://$h/ (not intercepted): $(& curl.exe -sS -o NUL -w '%{http_code}' --max-time 10 "http://$h/" 2>&1)"
+    $own = @(Get-NetTCPConnection -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -ge 45000 -and $_.LocalPort -le 45999 })
+    Write-Host "engine ports 45000-45999 in use: $($own.Count) ($(@($own | Where-Object State -eq 'TimeWait').Count) in TIME_WAIT)"
+    Write-Host "service: $((Get-Service dpi-proxy -ErrorAction SilentlyContinue).Status)"
+}
+function Check-Https([string]$url, [string]$what) {
+    $c = Fetch $url
+    if ($c -notmatch '^[23]\d\d$') { Https-Evidence $url; Die "$what -> '$c'" }
+    return $c
+}
 function Version-Of { return ((& (Join-Path $InstDir 'nivyx.cmd') version 2>&1 | Out-String).Trim() -replace '^Nivyx\s+', '') }
 
 Step "install the real $OldTag package"
@@ -58,9 +92,9 @@ Pass "$OldTag installed (version $oldVersion), HTTPS $c"
 Step 'user state that must survive'
 Add-Content $Conf "`n[domains]`nexample.com = tlsrec"
 Restart-Service dpi-proxy
-Start-Sleep -Seconds 4
+if (-not (Wait-Ready)) { Die "$OldTag not ready after restart" }
 1..3 | ForEach-Object { Fetch 'https://example.com/' | Out-Null }
-Start-Sleep -Seconds 11
+Wait-Heartbeat
 $confHash = (Get-FileHash $Conf).Hash
 $decisionsBefore = 0
 if (Test-Path $Decisions) { $decisionsBefore = @(Get-Content $Decisions | Where-Object { -not $_.StartsWith('#') }).Count }
@@ -89,20 +123,17 @@ if ($out -notmatch 'Manual rule') { Die "the manual rule no longer applies: $out
 Pass "version $oldVersion -> $newVersion; legacy wrappers gone; config and state intact"
 
 Step 'DNS, HTTPS, bypass, restart, doctor, repair after the upgrade'
-Start-Sleep -Seconds 11
+if (-not (Wait-Ready)) { Die 'not ready after the upgrade' }
+Wait-Heartbeat
 if ((Field dns_intercept) -ne 'doh') { Die "dns_intercept: $(Field dns_intercept)" }
 Clear-DnsClientCache
 Resolve-DnsName example.net -Type A -ErrorAction Stop | Out-Null
-$c = Fetch 'https://example.com/'
-if ($c -notmatch '^[23]\d\d$') { Die "HTTPS through the manual tlsrec rule -> '$c'" }
-$c = Fetch 'https://www.wikipedia.org/'
-if ($c -notmatch '^[23]\d\d$') { Die "HTTPS -> '$c'" }
+$c = Check-Https 'https://example.com/' 'HTTPS through the manual tlsrec rule'
+$c = Check-Https 'https://www.wikipedia.org/' 'HTTPS'
 $nv = Join-Path $InstDir 'nivyx.cmd'
 & $nv restart | Out-Null
-Start-Sleep -Seconds 3
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'not running after nivyx restart' }
-$c = Fetch 'https://example.com/'
-if ($c -notmatch '^[23]\d\d$') { Die "HTTPS after restart -> '$c'" }
+if (-not (Wait-Ready)) { Die 'not ready after nivyx restart' }
+$c = Check-Https 'https://example.com/' 'HTTPS after restart'
 & $nv doctor | Out-Host
 if ($LASTEXITCODE -ne 0) { Die 'doctor reported a failure' }
 $out = (& $nv repair 2>&1 | Out-String)

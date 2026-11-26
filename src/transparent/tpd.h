@@ -80,6 +80,8 @@ int		tpd_accept(int listen_fd);
 /* net.c: TCP connect to an already-resolved address, bounded by
  * `timeout_ms`, TCP_NODELAY set, prepared by tpp_prepare_socket (so it
  * is never intercepted itself). Blocking socket, or -1. */
+/* why this thread's last tpd_connect failed (for the log) */
+const char	*tpd_connect_error(void);
 int		tpd_connect(const struct sockaddr *addr, socklen_t addr_len,
 			int timeout_ms);
 
