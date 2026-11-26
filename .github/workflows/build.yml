@@ -326,7 +326,10 @@ jobs:
       # otherwise the test would not reproduce what it guards against
       - name: W8 control (the unfixed connect retry fails test_connect_retry)
         run: |
-          git show a360890:src/transparent/net.c >tests/unit/net_unfixed.c
+          # (the checkout is shallow and MSYS2 has no git: the file at that commit)
+          curl -fsSL -o tests/unit/net_unfixed.c \
+            https://raw.githubusercontent.com/kadireren7/nivyx/a360890/src/transparent/net.c
+          grep -q 'connect: socket error %d' tests/unit/net_unfixed.c
           gcc -Wall -Wextra -DHAVE_TRANSPARENT -D_WIN32_WINNT=0x0A00 -D__USE_MINGW_ANSI_STDIO=1 \
             -Iinclude -Isrc/transparent -I"$(cygpath -u "$RUNNER_TEMP")/openssl-win/include" \
             -DNET_C='"net_unfixed.c"' tests/unit/test_connect_retry.c src/compat.win.o \
