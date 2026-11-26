@@ -29,8 +29,64 @@ function Field($name) {
     $m = Select-String -Path $StatusFile -Pattern "^${name}: (.*)$" | Select-Object -First 1
     if ($m) { return $m.Matches[0].Groups[1].Value } else { return '' }
 }
+# Ready = the service runs and the engine it started reported "running"
+# (the status file carries that process's pid). Bounded: 30 s.
+function Wait-Ready {
+    foreach ($i in 1..60) {
+        $w = Get-CimInstance Win32_Service -Filter "Name='dpi-proxy'" -ErrorAction SilentlyContinue
+        if ($w -and $w.State -eq 'Running' -and $w.ProcessId -and (Test-Path $StatusFile) -and
+            (Select-String -Path $StatusFile -Pattern "^pid: $($w.ProcessId)$" -Quiet) -and
+            (Select-String -Path $StatusFile -Pattern '^engine: running' -Quiet)) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
 # the status file is rewritten every 10 s (heartbeat)
 function Wait-Status { Start-Sleep -Seconds 11 }
+# ---- OpenSSL configuration loading (see src/tlsclient.c) -------------------
+# A harmless but unmistakable configuration: if it is applied, no algorithm
+# can be fetched (fips=yes, no FIPS provider), TLS setup fails and the
+# engine logs "DNS-over-HTTPS unavailable".
+$HostileCnf = @('openssl_conf = nivyx_test', '[nivyx_test]', 'alg_section = nivyx_alg',
+    '[nivyx_alg]', 'default_properties = fips=yes')
+function Log-Since([int]$n) {
+    $all = @(Get-Content $LogFile -ErrorAction SilentlyContinue)
+    if ($all.Count -le $n) { return @() }
+    return $all[$n..($all.Count - 1)]
+}
+# Does the installed engine apply an OpenSSL configuration (1) named by
+# OPENSSL_CONF in the service environment, (2) found as etc\ssl\openssl.cnf
+# below its working directory when run by hand? Leaves the service running.
+function Test-LoadsOpenSslConfig {
+    $dir = Join-Path $env:TEMP ('nivyx-cnf-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path (Join-Path $dir 'etc\ssl') | Out-Null
+    $cnf = Join-Path $dir 'etc\ssl\openssl.cnf'
+    Set-Content -Encoding ASCII $cnf $HostileCnf
+    $res = @{}
+    $key = 'HKLM:\SYSTEM\CurrentControlSet\Services\dpi-proxy'
+    $n = @(Get-Content $LogFile -ErrorAction SilentlyContinue).Count
+    New-ItemProperty -Path $key -Name Environment -PropertyType MultiString -Value @("OPENSSL_CONF=$cnf") -Force | Out-Null
+    Restart-Service dpi-proxy
+    $null = Wait-Ready
+    $res.env = [bool]((Log-Since $n) -match 'DNS-over-HTTPS unavailable')
+    Remove-ItemProperty -Path $key -Name Environment
+    Stop-Service dpi-proxy
+    $n = @(Get-Content $LogFile -ErrorAction SilentlyContinue).Count
+    $p = Start-Process -FilePath (Join-Path $InstDir 'dpi-proxy.exe') -ArgumentList '--mode', 'transparent' `
+        -WorkingDirectory $dir -PassThru -WindowStyle Hidden
+    foreach ($i in 1..60) {
+        Start-Sleep -Milliseconds 250
+        if ((Log-Since $n) -match 'transparent mode: TCP/443|DNS-over-HTTPS unavailable|cannot ') { break }
+    }
+    $res.cwd = [bool]((Log-Since $n) -match 'DNS-over-HTTPS unavailable')
+    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue   # fail-open: interception ends with it
+    Start-Sleep -Milliseconds 500
+    Start-Service dpi-proxy
+    $null = Wait-Ready
+    Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "OpenSSL config applied: via OPENSSL_CONF=$($res.env), via .\etc\ssl\openssl.cnf=$($res.cwd)"
+    return $res
+}
 function Fetch($url) {
     $out = & curl.exe -sS -o NUL -w '%{http_code}' --max-time 20 $url 2>&1
     return "$out"
@@ -151,7 +207,7 @@ Pass "5 requests -> $delta flows"
 Step 'bypass path: forced tlsrec rule for example.com'
 Add-Content -Encoding ASCII (Join-Path $DataDir 'strategy.conf') "`n[domains]`nexample.com = tlsrec"
 Restart-Service dpi-proxy
-Start-Sleep -Seconds 3
+if (-not (Wait-Ready)) { Die 'not ready after restart' }
 $c = Fetch 'https://example.com/'
 if ($c -notmatch '^[23]\d\d$') { Die "example.com with tlsrec -> '$c'" }
 Wait-Status
@@ -160,7 +216,7 @@ Pass "example.com via tlsrec: HTTP $c; bypassed=$(Field bypassed)"
 
 Step 'restart keeps working'
 Restart-Service dpi-proxy
-Start-Sleep -Seconds 3
+if (-not (Wait-Ready)) { Die 'not ready after restart' }
 $c = Fetch 'https://www.wikipedia.org/'
 if ($c -notmatch '^[23]\d\d$') { Die "after restart -> '$c'" }
 Pass "after restart: HTTP $c"
@@ -174,7 +230,7 @@ Pass "stopped: HTTPS $c, DNS OK"
 
 Step 'crash = fail-open, then automatic restart'
 Start-Service dpi-proxy
-Start-Sleep -Seconds 3
+if (-not (Wait-Ready)) { Die 'not ready after start' }
 Stop-Process -Name dpi-proxy -Force
 Start-Sleep -Milliseconds 500
 $c = Fetch 'https://example.com/'
@@ -182,7 +238,7 @@ if ($c -notmatch '^[23]\d\d$') { Die "right after a crash -> '$c' (not fail-open
 $back = $false
 foreach ($i in 1..30) { Start-Sleep -Seconds 1; if ((Get-Service dpi-proxy).Status -eq 'Running') { $back = $true; break } }
 if (-not $back) { Die 'service was not restarted after the crash' }
-Start-Sleep -Seconds 3
+if (-not (Wait-Ready)) { Die 'not ready after the automatic restart' }
 $c2 = Fetch 'https://example.com/'
 if ($c2 -notmatch '^[23]\d\d$') { Die "after automatic restart -> '$c2'" }
 Pass "killed: HTTPS still $c; restarted automatically; HTTPS $c2"
@@ -216,6 +272,14 @@ $out = (& $nivyxCmd version 2>&1 | Out-String)
 Write-Host $out
 if ($LASTEXITCODE -ne 0 -or -not $out.Trim()) { Die 'nivyx version printed nothing' }
 Pass 'nivyx status/diagnose/logs/version report correctly'
+
+Step 'OpenSSL configuration files are never loaded (OPENSSL_CONF, .\etc\ssl\openssl.cnf)'
+$r = Test-LoadsOpenSslConfig
+if ($r.env -or $r.cwd) { Die 'the engine applied an OpenSSL configuration file (it must never read one on Windows)' }
+if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service not running after the config test' }
+$c = Fetch 'https://example.com/'
+if ($c -notmatch '^[23]\d\d$') { Die "after the config test -> '$c'" }
+Pass 'neither OPENSSL_CONF nor a planted etc\ssl\openssl.cnf is read; service restored'
 
 Step 'nivyx doctor'
 $out = (& $nivyxCmd doctor 2>&1 | Out-String)

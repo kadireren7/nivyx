@@ -35,7 +35,89 @@ function Die($m) {
     if (Test-Path $StatusFile) { Get-Content $StatusFile }
     exit 1
 }
+function Field($name) {
+    $m = Select-String -Path $StatusFile -Pattern "^${name}: (.*)$" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($m) { return $m.Matches[0].Groups[1].Value } else { return '' }
+}
+# ---- OpenSSL configuration loading (see src/tlsclient.c) -------------------
+# A harmless but unmistakable configuration: if it is applied, no algorithm
+# can be fetched (fips=yes, no FIPS provider), TLS setup fails and the
+# engine logs "DNS-over-HTTPS unavailable".
+$HostileCnf = @('openssl_conf = nivyx_test', '[nivyx_test]', 'alg_section = nivyx_alg',
+    '[nivyx_alg]', 'default_properties = fips=yes')
+function Log-Since([int]$n) {
+    $all = @(Get-Content $LogFile -ErrorAction SilentlyContinue)
+    if ($all.Count -le $n) { return @() }
+    return $all[$n..($all.Count - 1)]
+}
+# Does the installed engine apply an OpenSSL configuration (1) named by
+# OPENSSL_CONF in the service environment, (2) found as etc\ssl\openssl.cnf
+# below its working directory when run by hand? Leaves the service running.
+function Test-LoadsOpenSslConfig {
+    $dir = Join-Path $env:TEMP ('nivyx-cnf-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path (Join-Path $dir 'etc\ssl') | Out-Null
+    $cnf = Join-Path $dir 'etc\ssl\openssl.cnf'
+    Set-Content -Encoding ASCII $cnf $HostileCnf
+    $res = @{}
+    $key = 'HKLM:\SYSTEM\CurrentControlSet\Services\dpi-proxy'
+    $n = @(Get-Content $LogFile -ErrorAction SilentlyContinue).Count
+    New-ItemProperty -Path $key -Name Environment -PropertyType MultiString -Value @("OPENSSL_CONF=$cnf") -Force | Out-Null
+    Restart-Service dpi-proxy
+    $null = Wait-Ready
+    $res.env = [bool]((Log-Since $n) -match 'DNS-over-HTTPS unavailable')
+    Remove-ItemProperty -Path $key -Name Environment
+    Stop-Service dpi-proxy
+    $n = @(Get-Content $LogFile -ErrorAction SilentlyContinue).Count
+    $p = Start-Process -FilePath (Join-Path $InstDir 'dpi-proxy.exe') -ArgumentList '--mode', 'transparent' `
+        -WorkingDirectory $dir -PassThru -WindowStyle Hidden
+    foreach ($i in 1..60) {
+        Start-Sleep -Milliseconds 250
+        if ((Log-Since $n) -match 'transparent mode: TCP/443|DNS-over-HTTPS unavailable|cannot ') { break }
+    }
+    $res.cwd = [bool]((Log-Since $n) -match 'DNS-over-HTTPS unavailable')
+    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue   # fail-open: interception ends with it
+    Start-Sleep -Milliseconds 500
+    Start-Service dpi-proxy
+    $null = Wait-Ready
+    Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "OpenSSL config applied: via OPENSSL_CONF=$($res.env), via .\etc\ssl\openssl.cnf=$($res.cwd)"
+    return $res
+}
 function Fetch($url) { return "$(& curl.exe -sS -o NUL -w '%{http_code}' --max-time 20 $url 2>&1)" }
+# Ready = the service runs and the engine it started reported "running"
+# (the status file carries that process's pid). Bounded: 30 s.
+function Wait-Ready {
+    foreach ($i in 1..60) {
+        $w = Get-CimInstance Win32_Service -Filter "Name='dpi-proxy'" -ErrorAction SilentlyContinue
+        if ($w -and $w.State -eq 'Running' -and $w.ProcessId -and (Test-Path $StatusFile) -and
+            (Select-String -Path $StatusFile -Pattern "^pid: $($w.ProcessId)$" -Quiet) -and
+            (Select-String -Path $StatusFile -Pattern '^engine: running' -Quiet)) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+# the next heartbeat rewrite of the status file (every 10 s); bounded: 25 s
+function Wait-Heartbeat {
+    $u0 = Field updated
+    foreach ($i in 1..50) { Start-Sleep -Milliseconds 500; if ((Field updated) -ne $u0) { return } }
+}
+# What a failed HTTPS check through the engine looked like: the engine's
+# own reason, a direct probe that does not go through Nivyx (only TCP 443
+# and DNS are intercepted), and the engine's local port range.
+function Https-Evidence([string]$url) {
+    Write-Host '--- HTTPS failure evidence ---'
+    if (Test-Path $LogFile) { Get-Content $LogFile -Tail 15 | Where-Object { $_ -match '\[fail\]|\[verify\]|cannot' } | ForEach-Object { Write-Host "engine: $_" } }
+    $h = ([uri]$url).Host
+    Write-Host "direct http://$h/ (not intercepted): $(& curl.exe -sS -o NUL -w '%{http_code}' --max-time 10 "http://$h/" 2>&1)"
+    $own = @(Get-NetTCPConnection -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -ge 45000 -and $_.LocalPort -le 45999 })
+    Write-Host "engine ports 45000-45999 in use: $($own.Count) ($(@($own | Where-Object State -eq 'TimeWait').Count) in TIME_WAIT)"
+    Write-Host "service: $((Get-Service dpi-proxy -ErrorAction SilentlyContinue).Status)"
+}
+function Check-Https([string]$url, [string]$what) {
+    $c = Fetch $url
+    if ($c -notmatch '^[23]\d\d$') { Https-Evidence $url; Die "$what -> '$c'" }
+    return $c
+}
 function Version-Of { return ((& (Join-Path $InstDir 'nivyx.cmd') version 2>&1 | Out-String).Trim() -replace '^Nivyx\s+', '') }
 
 $newVersion = ((& (Join-Path $NewPackage 'dpi-proxy.exe') --version 2>&1 | Out-String).Trim() -replace '^dpi-proxy\s+', '')
@@ -49,9 +131,16 @@ Step "install the real $oldVersion package"
 if ($LASTEXITCODE -ne 0) { Die "$oldVersion install.ps1 exited $LASTEXITCODE" }
 Add-Content $Conf "`n[domains]`nexample.com = tlsrec"
 Restart-Service dpi-proxy
-Start-Sleep -Seconds 3
+if (-not (Wait-Ready)) { Die "$oldVersion not ready after restart" }
 $confHash = (Get-FileHash $Conf).Hash
 Pass "$oldVersion installed, manual rule added"
+
+Step "control: the $oldVersion engine applies OpenSSL configuration files (fixed in the candidate)"
+$r = Test-LoadsOpenSslConfig
+if (-not ($r.env -and $r.cwd)) {
+    Die "the $oldVersion engine did not apply the test configuration (env=$($r.env) cwd=$($r.cwd)): the check below would prove nothing"
+}
+Pass "$oldVersion reads OPENSSL_CONF and .\etc\ssl\openssl.cnf below its working directory"
 
 Step "serve the candidate $newVersion as the latest release"
 $mock = Join-Path $env:TEMP "nivyx-compat-$PID"
@@ -90,8 +179,8 @@ $rc = $LASTEXITCODE
 Remove-Item Env:\NIVYX_RELEASE_API
 Stop-Process -Id $httpd.Id -Force -ErrorAction SilentlyContinue
 if ($rc -ne 0 -or $out -notmatch 'Health check passed') { Die "the $oldVersion updater did not accept the candidate package (exit $rc)" }
-Start-Sleep -Seconds 5   # nivyx.cmd is swapped in after the updater exits
-$v = Version-Of
+# nivyx.cmd is swapped in by a helper a few seconds after the updater exits
+foreach ($i in 1..30) { $v = Version-Of; if ($v -eq $newVersion) { break }; Start-Sleep -Milliseconds 500 }
 if ($v -ne $newVersion) { Die "version after the old updater: $v (expected $newVersion)" }
 Pass "$oldVersion -> $newVersion through the old updater"
 
@@ -101,13 +190,17 @@ if ((Get-FileHash $Conf).Hash -ne $confHash) { Die 'the manual config was modifi
 $nv = Join-Path $InstDir 'nivyx.cmd'
 $out = (& $nv strategy example.com 2>&1 | Out-String)
 if ($out -notmatch 'Manual rule') { Die "manual rule lost: $out" }
-$c = Fetch 'https://example.com/'
-if ($c -notmatch '^[23]\d\d$') { Die "HTTPS -> '$c'" }
+$c = Check-Https 'https://example.com/' 'HTTPS after the update'
 & $nv doctor | Out-Host
 if ($LASTEXITCODE -ne 0) { Die 'doctor reported a failure after the update' }
 $out = (& $nv repair 2>&1 | Out-String)
 if ($out -notmatch 'nothing else wrong') { Die "repair found something wrong after the update: $out" }
 Pass 'config kept, manual rule applies, HTTPS, doctor and repair fine'
+
+Step "the updated engine never applies an OpenSSL configuration file"
+$r = Test-LoadsOpenSslConfig
+if ($r.env -or $r.cwd) { Die "after the update the engine still applies OpenSSL configuration files (env=$($r.env) cwd=$($r.cwd))" }
+Pass 'neither OPENSSL_CONF nor .\etc\ssl\openssl.cnf is read any more'
 
 Step 'uninstall'
 & powershell -ExecutionPolicy Bypass -File (Join-Path $NewPackage 'uninstall.ps1') -Purge

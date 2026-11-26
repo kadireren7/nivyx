@@ -85,6 +85,17 @@ void	*tlsc_ctx_new(const char *alpn)
 	unsigned char	wire[64];
 	size_t			n;
 
+#ifdef _WIN32
+	/* Never read an OpenSSL configuration file on Windows. The MinGW
+	 * OpenSSL resolves its default openssl.cnf relative to the current
+	 * directory (etc/ssl/openssl.cnf), and a configuration can load
+	 * provider DLLs: run elevated from a folder other users can write to,
+	 * the engine would execute their code. Nothing here needs a config.
+	 * Config loading is a run-once step: done first, this also covers
+	 * OPENSSL_CONF and every later implicit initialisation. */
+	if (OPENSSL_init_ssl(OPENSSL_INIT_NO_LOAD_CONFIG, NULL) != 1)
+		return (NULL);
+#endif
 	ctx = SSL_CTX_new(TLS_client_method());
 	if (ctx == NULL)
 		return (NULL);
