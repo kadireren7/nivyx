@@ -282,7 +282,7 @@ WIN_CFLAGS = $(CFLAGS) -DHAVE_TRANSPARENT -D_WIN32_WINNT=0x0A00 \
 LDFLAGS_WIN = $(if $(OPENSSL_WIN_PREFIX),-L$(OPENSSL_WIN_PREFIX)/lib) \
 	-Wl,-Bstatic -lssl -lcrypto -Wl,-Bdynamic \
 	$(WINDIVERT_DIR)/x64/WinDivert.lib \
-	-lws2_32 -liphlpapi -lcrypt32 -lbcrypt -ladvapi32 -luser32 \
+	-lws2_32 -liphlpapi -lcrypt32 -lbcrypt -ladvapi32 -luser32 -lgdi32 \
 	-static-libgcc -Wl,-Bstatic -lpthread -Wl,-Bdynamic
 WIN_OBJ = $(SRC:.c=.win.o) $(WIN_TP_SRC:.c=.win.o)
 

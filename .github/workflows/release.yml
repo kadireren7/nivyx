@@ -109,9 +109,17 @@ jobs:
         with:
           msystem: MINGW64
           install: >-
-            mingw-w64-x86_64-gcc mingw-w64-x86_64-openssl make curl unzip zip
+            mingw-w64-x86_64-gcc make perl curl unzip zip
       - run: ./scripts/windows/fetch-windivert.sh
-      - run: make windows CC_WIN=gcc OPENSSL_WIN_PREFIX=/mingw64
+      # OpenSSL from the pinned official source (scripts/windows/build-openssl.sh),
+      # not the MSYS2 package current on the build day; cached
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/openssl-win
+          key: openssl-win-${{ hashFiles('scripts/macos/build-openssl.sh', 'scripts/windows/build-openssl.sh') }}-v1
+      - name: OpenSSL (pinned, static)
+        run: ./scripts/windows/build-openssl.sh "$(cygpath -u "$RUNNER_TEMP")/openssl-win"
+      - run: make windows CC_WIN=gcc OPENSSL_WIN_PREFIX="$(cygpath -u "$RUNNER_TEMP")/openssl-win"
       - run: ./scripts/windows/package.sh nivyx-windows-x86_64
       # a release is only built from a folder that passed the same
       # end-to-end test as CI
