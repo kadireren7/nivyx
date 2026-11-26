@@ -1,4 +1,7 @@
 #include "capabilities.h"
+#ifdef HAVE_TRANSPARENT
+# include "release_verify.h"
+#endif
 #include "common.h"
 #include "platform.h"
 #include "socks.h"
@@ -210,6 +213,11 @@ int	main(int argc, char **argv)
 			print_capabilities();
 			return (0);
 		}
+#ifdef HAVE_TRANSPARENT
+		/* the updaters' signed-manifest check (docs/release-signing.md) */
+		else if (strcmp(argv[i], "--verify-release") == 0 && i + 3 < argc)
+			return (release_verify_main(argv[i + 1], argv[i + 2], argv[i + 3]));
+#endif
 		else if (strcmp(argv[i], "--listen") == 0 && i + 1 < argc)
 		{
 			i++;

@@ -87,6 +87,7 @@ TP_SRC = \
 	src/transparent/dnsfwd.c \
 	src/transparent/platform_linux.c \
 	src/tlsclient.c \
+	src/release_verify.c \
 	src/compat.c \
 	src/dns/dns.c \
 	src/dns/dns_udp.c \
@@ -268,6 +269,7 @@ WIN_TP_SRC = \
 	src/transparent/platform_windows.c \
 	src/transparent/svc_windows.c \
 	src/tlsclient.c \
+	src/release_verify.c \
 	src/compat.c \
 	src/dns/dns.c \
 	src/dns/dns_udp.c \
