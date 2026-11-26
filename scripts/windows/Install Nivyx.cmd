@@ -6,8 +6,9 @@ rem Elevates itself (a UAC prompt appears) and runs install.ps1 from
 rem this same folder, then keeps the window open so you can read the
 rem result. The exit code is install.ps1's own (0 = installed;
 rem 1 = not elevated, 2 = files missing, 4 = install/health check
-rem failed and was undone; 1223 = UAC prompt declined; 3 = install.ps1
-rem itself is missing). For manual or scripted installs, run install.ps1
+rem failed and was undone; 1223 = UAC prompt declined; 6 = Windows could
+rem not start the elevated installer for another reason, e.g. a policy;
+rem 3 = install.ps1 itself is missing). For manual or scripted installs, run install.ps1
 rem directly instead (see WINDOWS-QUICKSTART.txt).
 
 rem Run straight from inside the ZIP, Explorer extracts only this file
@@ -35,13 +36,22 @@ rem the elevated window's exit code.
 set "NIVYX_SELF=%~f0"
 set "NIVYX_DIR=%~dp0"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-	"try { $p = Start-Process -FilePath $env:NIVYX_SELF -WorkingDirectory $env:NIVYX_DIR -Verb RunAs -Wait -PassThru; exit $p.ExitCode } catch { exit 1223 }"
+	"try { $p = Start-Process -FilePath $env:NIVYX_SELF -WorkingDirectory $env:NIVYX_DIR -Verb RunAs -Wait -PassThru; exit $p.ExitCode } catch { $e = $_.Exception; while ($e -and $e -isnot [ComponentModel.Win32Exception]) { $e = $e.InnerException }; if ($e -and $e.NativeErrorCode -eq 1223) { exit 1223 }; [Console]::Error.WriteLine('Nivyx: Windows could not start the elevated installer: ' + $_.Exception.Message); exit 6 }"
 set RC=%errorlevel%
 if "%RC%"=="1223" (
 	echo.
 	echo Nivyx was NOT installed: the administrator prompt was declined.
 	echo Nothing was changed. Double-click "Install Nivyx.cmd" again and
 	echo choose Yes to install.
+	echo.
+	pause
+)
+rem 6: elevation itself failed for another reason (not a declined prompt),
+rem e.g. a policy that blocks it; the reason was printed above
+if "%RC%"=="6" (
+	echo.
+	echo Nivyx was NOT installed: Windows did not start it with administrator rights
+	echo ^(see the message above^). Nothing was changed.
 	echo.
 	pause
 )

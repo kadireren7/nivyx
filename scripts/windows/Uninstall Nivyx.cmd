@@ -2,7 +2,8 @@
 setlocal
 rem Nivyx: double-click uninstaller for Windows. Elevates itself and
 rem runs uninstall.ps1 from this same folder; the exit code is
-rem uninstall.ps1's own (1223 = UAC prompt declined, 3 = uninstall.ps1
+rem uninstall.ps1's own (1223 = UAC prompt declined, 6 = Windows could
+rem not start the elevated uninstaller for another reason, 3 = uninstall.ps1
 rem missing). Add -Purge to also remove settings and logs: run
 rem uninstall.ps1 directly for that (see WINDOWS-QUICKSTART.txt).
 
@@ -23,11 +24,20 @@ echo A User Account Control prompt will appear - choose Yes.
 set "NIVYX_SELF=%~f0"
 set "NIVYX_DIR=%~dp0"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-	"try { $p = Start-Process -FilePath $env:NIVYX_SELF -WorkingDirectory $env:NIVYX_DIR -Verb RunAs -Wait -PassThru; exit $p.ExitCode } catch { exit 1223 }"
+	"try { $p = Start-Process -FilePath $env:NIVYX_SELF -WorkingDirectory $env:NIVYX_DIR -Verb RunAs -Wait -PassThru; exit $p.ExitCode } catch { $e = $_.Exception; while ($e -and $e -isnot [ComponentModel.Win32Exception]) { $e = $e.InnerException }; if ($e -and $e.NativeErrorCode -eq 1223) { exit 1223 }; [Console]::Error.WriteLine('Nivyx: Windows could not start the elevated uninstaller: ' + $_.Exception.Message); exit 6 }"
 set RC=%errorlevel%
 if "%RC%"=="1223" (
 	echo.
 	echo Nivyx was NOT removed: the administrator prompt was declined.
+	echo.
+	pause
+)
+rem 6: elevation itself failed for another reason (not a declined prompt),
+rem e.g. a policy that blocks it; the reason was printed above
+if "%RC%"=="6" (
+	echo.
+	echo Nivyx was NOT removed: Windows did not start it with administrator rights
+	echo ^(see the message above^). Nothing was changed.
 	echo.
 	pause
 )
