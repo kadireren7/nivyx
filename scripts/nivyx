@@ -956,6 +956,9 @@ repair() {
 	else
 		okay "service is running"
 		if ! nft list table inet "$TP_TABLE" >/dev/null 2>&1; then
+			# a service that crashed and restarted several times in a row may
+			# have hit systemd's start rate limit: repair clears it first
+			systemctl reset-failed "$TP_SERVICE" 2>/dev/null || true
 			systemctl restart "$TP_SERVICE" && fixed "restarted $TP_SERVICE: its interception table was missing (removed externally)"
 		else
 			okay "interception table present"

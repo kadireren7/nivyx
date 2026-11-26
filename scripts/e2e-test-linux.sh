@@ -272,7 +272,12 @@ stepn "repair: nothing wrong on a healthy install"
 out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out"
 echo "$out" | grep -q 'nothing else wrong' || die "repair on a healthy install reported something"
 
-stepn "repair: firewall table removed externally"
+stepn "repair: firewall table removed externally, right after a burst of restarts"
+# five starts within systemd's 10 s window (StartLimitBurst=5): repair's own
+# restart is the sixth and must not be refused (it clears the rate limit)
+sudo systemctl reset-failed nivyx 2>/dev/null || true
+for _ in 1 2 3 4 5; do sudo systemctl restart nivyx || die "restart refused before the burst limit"; done
+engine_ready || die "not ready after the restart burst"
 sudo nft delete table inet dpi_proxy_tp || die "could not delete the table"
 out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out"
 echo "$out" | grep -q 'fixed' || die "repair fixed nothing"
