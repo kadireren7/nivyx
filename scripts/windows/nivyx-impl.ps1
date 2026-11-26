@@ -434,8 +434,22 @@ function Wait-Healthy([int]$seconds) {
     return $false
 }
 
+# One install/update/repair/uninstall at a time (install.ps1, uninstall.ps1,
+# nivyx update and repair share it): a machine-wide named mutex. Windows
+# releases it when its holder exits, also when the holder crashes.
+function Enter-AdminLock([string]$who) {
+    $script:AdminLock = New-Object System.Threading.Mutex($false, 'Global\NivyxAdminLock')
+    $got = $false
+    try { $got = $script:AdminLock.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+    if (-not $got) {
+        Write-Host "${who}another Nivyx install, update, repair or uninstall is running; try again when it has finished"
+        exit 1
+    }
+}
+
 function Invoke-Repair {
     if (-not (Is-Elevated)) { Write-Host 'nivyx: repair needs an elevated (Administrator) terminal'; exit 1 }
+    Enter-AdminLock 'nivyx: '
     Write-Host 'nivyx repair: checking Nivyx-owned state'
     Write-Host ''
     $svc = Get-Service $Service -ErrorAction SilentlyContinue
@@ -524,6 +538,84 @@ function Get-Sha256([string]$path) {
     finally { $fs.Dispose(); $sha.Dispose() }
 }
 
+# ---- release signature ------------------------------------------------------
+# The release manifest (nivyx-release.manifest) must carry a valid signature
+# (nivyx-release.manifest.sig) by one of these keys, name the version being
+# installed and list the download's SHA-256; checked by the installed engine
+# before anything downloaded is unpacked or run. Enforced once this list holds
+# a key. It is empty until the maintainer sets up the offline signing key
+# (docs/release-signing.md): until then the SHA256SUMS check is the only one,
+# as in earlier versions.
+# BEGIN RELEASE KEYS (from scripts/release-keys.txt by scripts/release-keys.sh sync)
+$ReleaseKeys = @'
+'@
+# END RELEASE KEYS
+$ManifestName = 'nivyx-release.manifest'
+
+# Exits on any failure. $rel: the release JSON; $got: the download's SHA-256.
+function Confirm-ReleaseSignature($rel, [string]$work, [string]$assetName, [string]$got, [string]$latest, [string]$current) {
+    $keys = Join-Path $work 'release-keys'
+    if ($env:NIVYX_TEST_RELEASE_KEYS) {
+        # the test suite's temporary keys; only together with the
+        # loopback-only NIVYX_RELEASE_API (checked before this)
+        if (-not $env:NIVYX_RELEASE_API) { Write-Host 'nivyx: NIVYX_TEST_RELEASE_KEYS is for the test suite (with NIVYX_RELEASE_API)'; exit 1 }
+        Write-Host "note: using test release keys $($env:NIVYX_TEST_RELEASE_KEYS)"
+        $lines = @(Get-Content $env:NIVYX_TEST_RELEASE_KEYS | Where-Object { $_ -match '^ed25519 ' })
+    } else {
+        $lines = @($ReleaseKeys -split "`r?`n" | Where-Object { $_ -match '^ed25519 ' })
+    }
+    if ($lines.Count -eq 0) {
+        Write-Host 'note: release signatures are not checked yet (no release key configured in this version)'
+        return
+    }
+    [System.IO.File]::WriteAllText($keys, (($lines -join "`n") + "`n"))
+    $m = $rel.assets | Where-Object { $_.name -eq $ManifestName } | Select-Object -First 1
+    $s = $rel.assets | Where-Object { $_.name -eq "$ManifestName.sig" } | Select-Object -First 1
+    if (-not $m -or -not $s) { Write-Host "nivyx: release $latest is not signed (no $ManifestName and/or $ManifestName.sig); nothing was installed"; exit 1 }
+    Confirm-DownloadUrl $m.browser_download_url
+    Confirm-DownloadUrl $s.browser_download_url
+    $man = Join-Path $work $ManifestName; $sig = Join-Path $work "$ManifestName.sig"
+    try {
+        Invoke-WebRequest -Uri $m.browser_download_url -OutFile $man -UseBasicParsing -TimeoutSec 60
+        Invoke-WebRequest -Uri $s.browser_download_url -OutFile $sig -UseBasicParsing -TimeoutSec 60
+    } catch { Write-Host 'nivyx: could not download the release signature; nothing was installed'; exit 1 }
+    if ((Get-Item $man).Length -gt 1MB -or (Get-Item $sig).Length -gt 64KB) { Write-Host 'nivyx: the release signature files are too large; nothing was installed'; exit 1 }
+    if (-not (Test-Path $Exe)) { Write-Host "nivyx: $Exe is missing: cannot check the release signature; nothing was installed"; exit 1 }
+    # stderr as plain text: with ErrorActionPreference Stop, Windows
+    # PowerShell would turn the engine's stderr line into an exception
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $out = ((& $Exe --verify-release $keys $man $sig 2>&1 | ForEach-Object { "$_" }) -join ' ').Trim()
+    $rc = $LASTEXITCODE
+    $ErrorActionPreference = $prev
+    if ($rc -ne 0) { Write-Host "nivyx: the release signature is not valid: $out; nothing was installed"; exit 1 }
+    # parsed only after the signature check, as bytes (no encoding guess)
+    $text = [System.IO.File]::ReadAllText($man, [System.Text.Encoding]::ASCII)
+    $ml = @($text -split "`n")
+    $versions = @($ml | Where-Object { $_ -cmatch '^version ' })
+    if ($ml[0] -cne 'nivyx-release-manifest 1' -or @($ml | Where-Object { $_ -ceq 'product nivyx' }).Count -ne 1 -or $versions.Count -ne 1) {
+        Write-Host 'nivyx: the signed manifest has an unknown format; nothing was installed'; exit 1
+    }
+    $mver = if ($versions[0] -cmatch '^version (\d+(\.\d+)*)$') { $Matches[1] } else { '' }
+    if ($mver -ne $latest) {
+        Write-Host "nivyx: the signed manifest is for version $(if ($mver) { $mver } else { '?' }), the release claims ${latest}: refusing a substituted or replayed release; nothing was installed"; exit 1
+    }
+    if (-not (Test-NewerVersion $mver $current)) {
+        Write-Host "nivyx: the signed release $mver is not newer than the installed ${current}: refusing a downgrade; nothing was installed"; exit 1
+    }
+    $want = @($ml | Where-Object { $_ -cmatch "^sha256 ([0-9a-f]{64}) $([regex]::Escape($assetName))$" } | ForEach-Object { ($_ -split ' ')[1] })
+    if ($want.Count -ne 1 -or $want[0] -ne $got) { Write-Host "nivyx: $assetName does not match the signed manifest; nothing was installed"; exit 1 }
+    Write-Host "Release signature verified ($($out -replace '^verified: ', ''))."
+}
+
+# Official repository only; with the test override, this machine only.
+function Confirm-DownloadUrl([string]$u) {
+    if (-not $env:NIVYX_RELEASE_API) {
+        if (-not $u.StartsWith('https://github.com/kadireren7/nivyx/releases/download/')) { Write-Host 'nivyx: refusing a download URL outside the official repository'; exit 1 }
+    } elseif ($u -notmatch '^https?://(127\.0\.0\.1|localhost)(:\d+)?/' -or $env:NIVYX_RELEASE_API -notmatch '^https?://(127\.0\.0\.1|localhost)(:\d+)?/') {
+        Write-Host "nivyx: NIVYX_RELEASE_API is for the test suite and must point at this machine (http://127.0.0.1:PORT/...); refusing $u"; exit 1
+    }
+}
+
 function Test-NewerVersion([string]$latest, [string]$current) {
     try { return ([version]$latest -gt [version]$current) } catch { return $false }
 }
@@ -555,6 +647,7 @@ function Invoke-Update([bool]$checkOnly) {
     Write-Host 'Update available.'
     if ($checkOnly) { Write-Host 'Run (elevated): nivyx update'; return }
     if (-not (Is-Elevated)) { Write-Host 'nivyx: updating needs an elevated (Administrator) terminal'; exit 1 }
+    Enter-AdminLock 'nivyx: '
 
     $assetName = 'nivyx-windows-x86_64.zip'
     $asset = $rel.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
@@ -591,6 +684,7 @@ function Invoke-Update([bool]$checkOnly) {
             exit 1
         }
         Write-Host 'SHA-256 verified.'
+        Confirm-ReleaseSignature $rel $work $assetName $got $latest $current
 
         # .NET directly, not Expand-Archive: Windows PowerShell started from
         # PowerShell 7 inherits its PSModulePath and loads an Archive module

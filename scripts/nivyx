@@ -1017,6 +1017,92 @@ take_admin_lock() {
 	flock -n 9 || { err "another Nivyx install, update, repair or uninstall is running; try again when it has finished"; exit 1; }
 }
 
+# ---- release signature ---------------------------------------------------
+# The release manifest (nivyx-release.manifest) must carry a valid
+# signature (nivyx-release.manifest.sig) by one of these keys, name the
+# version being installed and list the download's SHA-256; checked by the
+# installed engine before anything downloaded is unpacked or run.
+# Enforced once this list holds a key. It is empty until the maintainer
+# sets up the offline signing key (docs/release-signing.md): until then
+# the SHA256SUMS check is the only one, as in earlier versions.
+# BEGIN RELEASE KEYS (from scripts/release-keys.txt by scripts/release-keys.sh sync)
+RELEASE_KEYS='
+'
+# END RELEASE KEYS
+MANIFEST_NAME=nivyx-release.manifest
+
+# The download URL of release asset $1 ("" if the release has none).
+asset_url() {
+	printf '%s' "$release_json" | grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*/'"${1//./\\.}"'"' \
+		| sed 's/.*"\(http[^"]*\)"$/\1/' | head -n 1
+}
+
+# Official repository only; with the test override, this machine only.
+check_download_url() {
+	if [ -z "${NIVYX_RELEASE_API:-}" ]; then
+		case "$1" in "$OFFICIAL_PREFIX"*) return 0 ;; esac
+		err "refusing a download URL outside the official repository"
+	else
+		is_loopback_url "$RELEASE_API" && is_loopback_url "$1" && return 0
+		err "NIVYX_RELEASE_API is for the test suite and must point at this machine (http://127.0.0.1:PORT/...); refusing $1"
+	fi
+	exit 1
+}
+
+# Called by update_cmd after the SHA256SUMS check (uses its asset, got,
+# current and the release's latest). Exits on any failure.
+verify_release_signature() {
+	local keys="$work/release-keys" man="$work/$MANIFEST_NAME" sig="$work/$MANIFEST_NAME.sig"
+	local man_url sig_url out mver mwant
+	if [ -n "${NIVYX_TEST_RELEASE_KEYS:-}" ]; then
+		# the test suite's temporary keys; only together with the
+		# loopback-only NIVYX_RELEASE_API (checked before this)
+		[ -n "${NIVYX_RELEASE_API:-}" ] || { err "NIVYX_TEST_RELEASE_KEYS is for the test suite (with NIVYX_RELEASE_API)"; exit 1; }
+		echo "note: using test release keys $NIVYX_TEST_RELEASE_KEYS" >&2
+		grep '^ed25519 ' "$NIVYX_TEST_RELEASE_KEYS" >"$keys" || true
+	else
+		printf '%s\n' "$RELEASE_KEYS" | grep '^ed25519 ' >"$keys" || true
+	fi
+	if [ ! -s "$keys" ]; then
+		echo "note: release signatures are not checked yet (no release key configured in this version)"
+		return 0
+	fi
+	man_url="$(asset_url "$MANIFEST_NAME")"; sig_url="$(asset_url "$MANIFEST_NAME.sig")"
+	if [ -z "$man_url" ] || [ -z "$sig_url" ]; then
+		err "release $latest is not signed (no $MANIFEST_NAME and/or $MANIFEST_NAME.sig); nothing was installed"
+		exit 1
+	fi
+	check_download_url "$man_url"; check_download_url "$sig_url"
+	curl -fsSL --max-time 60 --max-filesize 1048576 -o "$man" "$man_url" \
+		&& curl -fsSL --max-time 60 --max-filesize 65536 -o "$sig" "$sig_url" \
+		|| { err "could not download the release signature; nothing was installed"; exit 1; }
+	[ -x "$ENGINE_BIN" ] || { err "$ENGINE_BIN is missing: cannot check the release signature; nothing was installed"; exit 1; }
+	if ! out="$("$ENGINE_BIN" --verify-release "$keys" "$man" "$sig" 2>&1)"; then
+		err "the release signature is not valid: ${out:-no result}; nothing was installed"
+		exit 1
+	fi
+	if [ "$(sed -n 1p "$man")" != "nivyx-release-manifest 1" ] || [ "$(grep -c '^product nivyx$' "$man")" != 1 ] \
+		|| [ "$(grep -c '^version ' "$man")" != 1 ]; then
+		err "the signed manifest has an unknown format; nothing was installed"
+		exit 1
+	fi
+	mver="$(sed -n 's/^version \([0-9][0-9.]*\)$/\1/p' "$man")"
+	if [ "$mver" != "$latest" ]; then
+		err "the signed manifest is for version ${mver:-?}, the release claims $latest: refusing a substituted or replayed release; nothing was installed"
+		exit 1
+	fi
+	if ! ver_gt "$mver" "${current:-0}"; then
+		err "the signed release $mver is not newer than the installed ${current:-version}: refusing a downgrade; nothing was installed"
+		exit 1
+	fi
+	mwant="$(awk -v a="$asset" 'NF == 3 && $1 == "sha256" && $3 == a { print $2 }' "$man")"
+	if [ "$(printf '%s' "$mwant" | grep -c .)" != 1 ] || [ "$mwant" != "$got" ]; then
+		err "$asset does not match the signed manifest; nothing was installed"
+		exit 1
+	fi
+	echo "Release signature verified (${out#verified: })."
+}
+
 # True if $1 is strictly newer than $2 (plain x.y.z comparison).
 ver_gt() {
 	[ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
@@ -1058,18 +1144,11 @@ update_cmd() {
 	*) err "no release asset for this architecture ($(uname -m)); build from source"; exit 1 ;;
 	esac
 	asset="nivyx-linux-$arch.tar.gz"
-	url="$(printf '%s' "$release_json" | grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*/'"$asset"'"' | sed 's/.*"\(http[^"]*\)"$/\1/' | head -n 1)"
-	sums_url="$(printf '%s' "$release_json" | grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*/SHA256SUMS"' | sed 's/.*"\(http[^"]*\)"$/\1/' | head -n 1)"
+	url="$(asset_url "$asset")"
+	sums_url="$(asset_url SHA256SUMS)"
 	[ -n "$url" ] && [ -n "$sums_url" ] || { err "release $latest has no $asset and/or SHA256SUMS"; exit 1; }
-	if [ -z "${NIVYX_RELEASE_API:-}" ]; then
-		case "$url$sums_url" in
-		"$OFFICIAL_PREFIX"*"$OFFICIAL_PREFIX"*) ;;
-		*) err "refusing a download URL outside the official repository"; exit 1 ;;
-		esac
-	elif ! is_loopback_url "$RELEASE_API" || ! is_loopback_url "$url" || ! is_loopback_url "$sums_url"; then
-		err "NIVYX_RELEASE_API is for the test suite and must point at this machine (http://127.0.0.1:PORT/...); refusing $RELEASE_API"
-		exit 1
-	fi
+	check_download_url "$url"
+	check_download_url "$sums_url"
 	take_admin_lock
 
 	work="$(mktemp -d /var/tmp/nivyx-update.XXXXXX)"
@@ -1085,6 +1164,7 @@ update_cmd() {
 		exit 1
 	fi
 	echo "SHA-256 verified."
+	verify_release_signature
 
 	# only plain files and folders inside nivyx-linux-<arch>/: no links,
 	# no absolute or ".." paths
