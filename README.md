@@ -26,7 +26,7 @@ man-in-the-middles TLS.
 
 | Platform | What you get | Validation |
 |---|---|---|
-| Linux | **Transparent automatic mode** | Real ISP/DPI field-tested |
+| Linux (x86_64; arm64 from source) | **Transparent automatic mode** | Real ISP/DPI field-tested (x86_64); arm64 CI-tested |
 | Windows 10/11 (x64) | **Transparent automatic mode** | Real ISP/DPI field-tested |
 | macOS (Apple silicon, Intel) | **Transparent automatic mode** | Real ISP/DPI field-tested |
 
@@ -54,7 +54,8 @@ Nivyx, sets up the system service and starts it.
 
 1. Download `nivyx-windows-x86_64.zip` from [Releases](https://github.com/kadireren7/nivyx/releases/latest).
 2. Extract it.
-3. Double-click **Install Nivyx.cmd**.
+3. Double-click **Install Nivyx.cmd** (not `dpi-proxy.exe`: that is the
+   internal engine the service runs).
 4. Accept the UAC prompt.
 
 [Windows guide](docs/windows.md)
@@ -77,8 +78,18 @@ tools or VPN packet filters (`nivyx doctor` after install checks for
 the ones it can detect).
 
 Release files can be verified: every release ships `SHA256SUMS`, an
-SPDX SBOM and signed build provenance (`gh attestation verify <file>
---repo kadireren7/nivyx`). Piping a downloaded script into a root shell
+SPDX SBOM, a release manifest and signed build provenance (`gh
+attestation verify <file> --repo kadireren7/nivyx`). `nivyx update` is
+prepared to require the maintainer's offline signature on that manifest
+(docs/release-signing.md); it is not enforced yet because no signing key
+has been set up; updates are verified with SHA-256 against
+`SHA256SUMS`.
+
+**Testing status:** releases are tested automatically on GitHub-hosted
+Linux, macOS and Windows machines (install, upgrade, update, rollback,
+repair, uninstall). They have **not yet been validated on physical
+consumer devices** (real PCs and Macs with antivirus, Raspberry Pi, real
+DPI networks); see docs/RELEASE-CHECKLIST.md. Piping a downloaded script into a root shell
 is deliberately not offered: the Linux installer builds from the source
 you cloned, so you can read what it runs.
 
@@ -92,7 +103,8 @@ Most people need just one file: the Windows ZIP, or the macOS ZIP for their Mac.
 | `nivyx-macos-arm64.zip` | Apple silicon Macs |
 | `nivyx-macos-x86_64.zip` | Intel Macs |
 | `SHA256SUMS` | SHA-256 integrity verification |
-| `nivyx-2.2.x.spdx.json` | SBOM / dependency inventory |
+| `nivyx-<version>.spdx.json` | SBOM / dependency inventory |
+| `nivyx-release.manifest` | version and SHA-256 of every release file (prepared for signed updates) |
 
 A Linux archive (`nivyx-linux-x86_64.tar.gz`) is also attached; it exists only for `nivyx update` and is not an installer.
 
@@ -107,7 +119,7 @@ One command, the same on every platform (`start`/`stop`/`restart`/
 
 ```
 $ nivyx status
-Nivyx 2.3.0
+Nivyx 2.4.0
 Service: Running
 Protection: Active
 DNS: Healthy
@@ -172,6 +184,10 @@ ask.
   [docs/windows.md](docs/windows.md), [docs/macos.md](docs/macos.md).
 
 ## Uninstall
+
+A plain uninstall keeps your settings and learned state on every
+platform (a reinstall picks them up); `--purge` (Windows: `-Purge`)
+removes them too.
 
 Linux: `sudo ./scripts/uninstall.sh` (details: [docs/linux.md](docs/linux.md)).
 Windows: double-click `Uninstall Nivyx.cmd` (details: [docs/windows.md](docs/windows.md)).

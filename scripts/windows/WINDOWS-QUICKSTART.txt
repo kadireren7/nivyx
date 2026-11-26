@@ -12,8 +12,13 @@ BEFORE YOU START
     not our code. Nivyx uses it only to send this computer's own
     HTTPS and DNS traffic through the local dpi-proxy service.
 
+WHICH FILE DO I OPEN?
+  Only "Install Nivyx.cmd" (and later "Uninstall Nivyx.cmd").
+  dpi-proxy.exe is the internal engine that the Nivyx service runs;
+  opening it yourself does nothing useful (it just tells you this).
+
 INSTALL (recommended: double-click)
-  1. Extract this ZIP to any folder.
+  1. Extract this ZIP to any folder (do not run it from inside the ZIP).
   2. Double-click "Install Nivyx.cmd". A User Account Control prompt
      appears (choose Yes) - it needs administrator rights to install a
      system service. The window stays open so you can read the result.
@@ -28,6 +33,16 @@ INSTALL (advanced/manual: PowerShell)
   right click -> "Run as administrator"), go to the extracted folder,
   and run:
          powershell -ExecutionPolicy Bypass -File .\install.ps1
+
+IF THE INSTALL FAILS
+  The window says "Nivyx was NOT installed (error N)" and shows why.
+  Nothing is left intercepting: your normal internet keeps working.
+    2     a file is missing - download and extract the ZIP again
+    4     the service did not start - the last log lines are shown
+          (antivirus removing or blocking WinDivert64.sys is common)
+    6     Windows did not start it as administrator (e.g. a policy) -
+          the reason is shown, nothing changed
+    1223  you declined the administrator prompt - nothing changed
 
 IF SOMETHING DOES NOT WORK
          nivyx doctor

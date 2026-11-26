@@ -102,6 +102,29 @@ wait_running || die "service not running after install"
 command -v nivyx >/dev/null || die "nivyx is not on the PATH"
 pass "installed; launchd job running (pid $(daemon_pid)); installer health check passed"
 
+stepn "one install/update/repair/uninstall at a time (U4)"
+# a live holder (pid of a running process): every operation refuses and
+# leaves the install alone; a dead holder's lock is taken over
+sleep 120 &
+holder=$!
+sudo ln -s "$holder" /var/run/nivyx-admin.lock
+p0="$(daemon_pid)"
+for what in repair uninstall install; do
+	case "$what" in
+	repair) out="$(sudo /usr/local/bin/nivyx repair 2>&1)"; rc=$? ;;
+	uninstall) out="$(cd "$PKG" && sudo ./uninstall.sh 2>&1)"; rc=$? ;;
+	install) out="$(cd "$PKG" && sudo ./install.sh 2>&1)"; rc=$? ;;
+	esac
+	[ "$rc" != 0 ] || { echo "$out"; die "$what ran while another operation held the lock"; }
+	echo "$out" | grep -q 'another Nivyx install, update, repair or uninstall is running' || { echo "$out"; die "$what: no lock message"; }
+done
+[ "$(daemon_pid)" = "$p0" ] && [ -f "/Library/LaunchDaemons/$LABEL.plist" ] && [ -x /usr/local/bin/dpi-proxy ] \
+	|| die "a refused operation touched the install"
+kill "$holder"; wait "$holder" 2>/dev/null
+out="$(sudo /usr/local/bin/nivyx repair 2>&1)" || { echo "$out"; die "repair did not take over the lock of a finished holder"; }
+[ ! -e /var/run/nivyx-admin.lock ] && [ ! -L /var/run/nivyx-admin.lock ] || die "repair left the lock behind"
+pass "refused while held (install untouched); a dead holder's lock is taken over and released"
+
 stepn "PF: enabled, our anchor loaded, main ruleset untouched, watchdog up"
 [ "$(sudo pfctl -s info | sed -n 's/^Status: \([A-Za-z]*\).*/\1/p')" = Enabled ] || die "PF not enabled"
 sudo pfctl -a "$ANCHOR" -s nat
@@ -468,8 +491,44 @@ kill "$httpd" 2>/dev/null || true
 rm -rf "$mock"
 pass "check ok; bad checksum rejected; broken release rolled back; good release installed ($current -> 9.9.9), config kept"
 
-stepn "uninstall leaves nothing behind"
+stepn "a reinstall that fails its health check puts the previous install back"
+eng0="$(shasum -a 256 /usr/local/bin/dpi-proxy | cut -d' ' -f1)"
+plist0="$(shasum -a 256 "/Library/LaunchDaemons/$LABEL.plist" | cut -d' ' -f1)"
+conf0="$(shasum -a 256 "$CONF" | cut -d' ' -f1)"
+bad="$(mktemp -d)/pkg"
+cp -R "$PKG" "$bad"
+# a job that never starts the engine
+sed -i '' 's#<string>/usr/local/bin/dpi-proxy</string>#<string>/usr/bin/false</string>#' "$bad/$LABEL.plist"
+rc=0; out="$(cd "$bad" && sudo ./install.sh 2>&1)" || rc=$?
+rm -rf "$(dirname "$bad")"
+[ "$rc" = 4 ] || { echo "$out"; die "install.sh with a broken job exited $rc (expected 4)"; }
+echo "$out" | grep -q 'previous installation is back and running' || { echo "$out"; die "no restore message"; }
+wait_running || die "the previous install is not running again"
+[ "$(shasum -a 256 "/Library/LaunchDaemons/$LABEL.plist" | cut -d' ' -f1)" = "$plist0" ] || die "the previous plist was not restored"
+[ "$(shasum -a 256 /usr/local/bin/dpi-proxy | cut -d' ' -f1)" = "$eng0" ] || die "the previous engine was not restored"
+[ "$(shasum -a 256 "$CONF" | cut -d' ' -f1)" = "$conf0" ] || die "the config changed"
+ls -d /private/var/tmp/nivyx-install-backup.* >/dev/null 2>&1 && die "a successful restore left its backup behind"
+c="$(fetch https://example.com/)"; ok "$c" || die "after the restore -> '$c'"
+pass "exit 4; previous plist, engine and config restored; running; HTTPS $c"
+
+stepn "plain uninstall keeps settings, learned state and logs"
+printf '\n[domains]\ne2e-keep.example = tlsrec\n' | sudo tee -a "$CONF" >/dev/null
+conf1="$(shasum -a 256 "$CONF" | cut -d' ' -f1)"
 ( cd "$PKG" && sudo ./uninstall.sh ) || die "uninstall.sh failed"
+[ -e "/Library/LaunchDaemons/$LABEL.plist" ] && die "plist left"
+launchctl print "system/$LABEL" >/dev/null 2>&1 && die "launchd job left"
+[ -e /usr/local/bin/dpi-proxy ] && die "engine left"
+anchor_empty || die "rules or tables left in $ANCHOR"
+[ "$(shasum -a 256 "$CONF" | cut -d' ' -f1)" = "$conf1" ] || die "plain uninstall removed or changed the config"
+[ -d /usr/local/var/dpi-proxy ] || die "plain uninstall removed the learned state"
+[ -e "$LOG" ] || die "plain uninstall removed the log"
+c="$(fetch https://example.com/)"; ok "$c" || die "after plain uninstall -> '$c'"
+( cd "$PKG" && sudo ./install.sh ) || die "reinstall over kept settings failed"
+[ "$(shasum -a 256 "$CONF" | cut -d' ' -f1)" = "$conf1" ] || die "reinstall changed the kept config"
+pass "config, state and log kept; no job, engine or PF rules; reinstall uses them; HTTPS $c"
+
+stepn "uninstall --purge leaves nothing behind"
+( cd "$PKG" && sudo ./uninstall.sh --purge ) || die "uninstall.sh --purge failed"
 [ -e "/Library/LaunchDaemons/$LABEL.plist" ] && die "plist left"
 launchctl print "system/$LABEL" >/dev/null 2>&1 && die "launchd job left"
 for f in /usr/local/bin/dpi-proxy /usr/local/bin/nivyx /usr/local/etc/dpi-proxy \
@@ -492,7 +551,7 @@ stepn "clean reinstall"
 ( cd "$PKG" && sudo ./install.sh ) || die "reinstall failed"
 wait_running || die "not running after reinstall"
 c="$(fetch https://github.com/)"; ok "$c" || die "after reinstall -> '$c'"
-( cd "$PKG" && sudo ./uninstall.sh ) || die "second uninstall failed"
+( cd "$PKG" && sudo ./uninstall.sh --purge ) || die "second uninstall failed"
 pf_state >/tmp/dpi-e2e-pf-after2.txt
 diff /tmp/dpi-e2e-pf-before.txt /tmp/dpi-e2e-pf-after2.txt || die "PF state differs after the second uninstall"
 pass "reinstalled (HTTPS $c) and uninstalled cleanly again"

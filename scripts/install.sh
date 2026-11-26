@@ -64,21 +64,94 @@ if [ "$(id -u)" -ne 0 ]; then
 	exit 1
 fi
 
-# If anything below fails, leave the machine fail-open: our service
-# stopped and our nftables table gone. Files already copied stay (a
-# re-run overwrites them).
+# Two phases. PREFLIGHT (dependencies, build, checking the built engine)
+# changes nothing on the system: if it fails, an existing installation is
+# left exactly as it was, running. COMMIT starts by backing up everything
+# the install may replace (binaries, units, man page, completions,
+# /etc/nivyx, /var/lib/nivyx) and the state of every Nivyx service. If
+# anything fails from then on, the backup is put back and the services
+# that were running before are started again; an install from before
+# v2.3 keeps its old names, files and service until the new one has
+# passed its health check.
+PHASE=preflight
 INSTALL_OK=0
-# Set when we stop before changing anything (missing dependencies): an
-# existing, working installation is then left running untouched.
-NOTHING_CHANGED=0
-cleanup_on_failure() {
-	if [ "$INSTALL_OK" -ne 1 ] && [ "$NOTHING_CHANGED" -ne 1 ]; then
-		err "install failed — stopping $TP_SERVICE and removing its nftables table"
-		systemctl stop "$TP_SERVICE" >/dev/null 2>&1 || true
-		nft delete table inet "$TP_TABLE" >/dev/null 2>&1 || true
+BACKUP=""
+MANAGED_FILES="$BIN_DEST $PACKET_BIN_DEST $NIVYX_DEST
+/usr/local/share/man/man1/nivyx.1
+/usr/share/bash-completion/completions/nivyx
+/usr/local/share/zsh/site-functions/_nivyx
+/usr/share/fish/vendor_completions.d/nivyx.fish
+$UNIT_DIR/$TP_SERVICE.service $UNIT_DIR/$PACKET_SERVICE.service
+/usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl"
+MANAGED_DIRS="/etc/nivyx /var/lib/nivyx"
+ALL_SERVICES="$TP_SERVICE $PACKET_SERVICE $OLD_TP_SERVICE $OLD_PACKET_SERVICE"
+
+backup_state() {
+	local p s
+	BACKUP="$(mktemp -d /var/tmp/nivyx-install-backup.XXXXXX)"
+	: >"$BACKUP/absent"
+	for p in $MANAGED_FILES $MANAGED_DIRS; do
+		if [ -e "$p" ] || [ -L "$p" ]; then
+			mkdir -p "$BACKUP/files$(dirname "$p")"
+			cp -a "$p" "$BACKUP/files$p"
+		else
+			printf '%s\n' "$p" >>"$BACKUP/absent"
+		fi
+	done
+	for s in $ALL_SERVICES; do
+		printf '%s %s %s\n' "$s" "$(systemctl is-active "$s" 2>/dev/null || true)" \
+			"$(systemctl is-enabled "$s" 2>/dev/null || true)" >>"$BACKUP/services"
+	done
+}
+
+# Puts back what backup_state saved; returns non-zero if a service that
+# ran before is not running again (the backup is then kept).
+restore_state() {
+	local p s active enabled ok=0
+	systemctl stop "$TP_SERVICE" "$PACKET_SERVICE" >/dev/null 2>&1 || true
+	nft delete table inet "$TP_TABLE" >/dev/null 2>&1 || true
+	# un-enable what was not enabled before while its unit file still exists
+	while read -r s active enabled; do
+		[ "$enabled" = enabled ] || systemctl disable "$s" >/dev/null 2>&1 || true
+	done <"$BACKUP/services"
+	for p in $MANAGED_FILES $MANAGED_DIRS; do
+		if [ -e "$BACKUP/files$p" ] || [ -L "$BACKUP/files$p" ]; then
+			rm -rf "$p" && cp -a "$BACKUP/files$p" "$p" || ok=1
+		elif grep -qxF "$p" "$BACKUP/absent"; then
+			rm -rf "$p" || ok=1
+		fi
+	done
+	systemctl daemon-reload || ok=1
+	while read -r s active enabled; do
+		[ "$enabled" = enabled ] && { systemctl enable "$s" >/dev/null 2>&1 || ok=1; }
+	done <"$BACKUP/services"
+	while read -r s active enabled; do
+		[ "$active" = active ] || continue
+		systemctl reset-failed "$s" >/dev/null 2>&1 || true
+		systemctl start "$s" >/dev/null 2>&1 && systemctl is-active --quiet "$s" || ok=1
+	done <"$BACKUP/services"
+	return $ok
+}
+
+on_exit() {
+	[ "$INSTALL_OK" = 1 ] && return 0
+	if [ "$PHASE" = preflight ]; then
+		[ -n "$BACKUP" ] && rm -rf "$BACKUP"
+		err "stopped before changing anything; an existing Nivyx installation is untouched"
+		return 0
+	fi
+	err "install failed — restoring the previous state"
+	if restore_state; then
+		rm -rf "$BACKUP"
+		err "previous state restored (services that were running are running again)"
+	else
+		err "could not fully restore the previous state; nothing was deleted:"
+		err "  backup kept in $BACKUP (files/ = the replaced files, services = their state)"
+		err "  your internet works (fail-open); check: systemctl status $TP_SERVICE $OLD_TP_SERVICE"
 	fi
 }
-trap cleanup_on_failure EXIT
+trap on_exit EXIT
+trap 'exit 130' INT TERM HUP
 
 # Build as the invoking (non-root) user, so build artifacts in the repo
 # stay owned by them.
@@ -90,6 +163,12 @@ run_as_build_user() {
 		"$@"
 	fi
 }
+
+# one install/update/repair/uninstall at a time (same lock as nivyx)
+if command -v flock >/dev/null 2>&1; then
+	exec 9>/run/nivyx-admin.lock
+	flock -n 9 || { err "another Nivyx install, update, repair or uninstall is running; try again when it has finished"; exit 1; }
+fi
 
 log "[1/7] Checking dependencies..."
 
@@ -141,7 +220,7 @@ if ! have systemctl; then
 	err "systemd (systemctl) is required and was not found. Nivyx supports"
 	err "systemd + nftables based Linux distributions; other init systems"
 	err "(OpenRC, runit, Slackware's rc, ...) are not supported by this installer."
-	{ NOTHING_CHANGED=1; exit 2; }
+	exit 2
 fi
 
 if [ -n "$need_pkgs" ]; then
@@ -156,17 +235,17 @@ if [ -n "$need_pkgs" ]; then
 		if ! apt-get install -y --no-install-recommends $need_pkgs >"$aptlog" 2>&1; then
 			log "  refreshing package lists (apt-get update)..."
 			apt-get update >>"$aptlog" 2>&1 \
-				|| { tail -n 8 "$aptlog" >&2; err "apt-get update failed (network or package sources). Nothing was changed; your internet and any existing Nivyx are unaffected."; err "install manually, then re-run: sudo apt-get install -y $need_pkgs"; { NOTHING_CHANGED=1; exit 2; }; }
+				|| { tail -n 8 "$aptlog" >&2; err "apt-get update failed (network or package sources). Nothing was changed; your internet and any existing Nivyx are unaffected."; err "install manually, then re-run: sudo apt-get install -y $need_pkgs"; exit 2; }
 			# shellcheck disable=SC2086
 			apt-get install -y --no-install-recommends $need_pkgs >>"$aptlog" 2>&1 \
-				|| { tail -n 8 "$aptlog" >&2; err "could not install: $need_pkgs. Nothing was changed; your internet and any existing Nivyx are unaffected."; err "install manually, then re-run: sudo apt-get install -y $need_pkgs"; { NOTHING_CHANGED=1; exit 2; }; }
+				|| { tail -n 8 "$aptlog" >&2; err "could not install: $need_pkgs. Nothing was changed; your internet and any existing Nivyx are unaffected."; err "install manually, then re-run: sudo apt-get install -y $need_pkgs"; exit 2; }
 		fi
 		rm -f "$aptlog"
 		# verify the install really provided what was missing
 		for tool in cc make nft openssl; do
-			have "$tool" || { err "$tool is still missing after installing packages"; { NOTHING_CHANGED=1; exit 2; }; }
+			have "$tool" || { err "$tool is still missing after installing packages"; exit 2; }
 		done
-		have_openssl_headers || { err "OpenSSL headers are still missing after installing libssl-dev"; { NOTHING_CHANGED=1; exit 2; }; }
+		have_openssl_headers || { err "OpenSSL headers are still missing after installing libssl-dev"; exit 2; }
 	else
 		err "missing: $need_desc"
 		err "packages are installed automatically only on Debian/Ubuntu."
@@ -175,7 +254,7 @@ if [ -n "$need_pkgs" ]; then
 		err "  (Arch: base-devel nftables openssl; Fedora: gcc make nftables openssl-devel;"
 		err "   openSUSE: gcc make nftables libopenssl-devel)"
 		[ "$WITH_PACKET" = 1 ] && err "  and libnetfilter_queue development files for --packet"
-		{ NOTHING_CHANGED=1; exit 2; }
+		exit 2
 	fi
 fi
 log "  OK"
@@ -209,24 +288,35 @@ remove_legacy_cli() {
 	done
 }
 
-log "[3/7] Stopping running Nivyx services for a clean (re)install..."
+log "[3/7] Backing up and stopping the current installation (if any)..."
+backup_state
+PHASE=commit
 systemctl stop "$TP_SERVICE" "$OLD_TP_SERVICE" >/dev/null 2>&1 || true
 # Move an install from before v2.3 to the current names. Settings and
-# learned state are copied (never overwriting what already exists under
-# the new names); the old unit, binaries and folders go afterwards.
-if [ -f "$UNIT_DIR/$OLD_TP_SERVICE.service" ] || [ -d /etc/dpi-proxy ]; then
+# learned state are copied, never overwriting what already exists under
+# the new names (a differing old copy is kept next to it as *.legacy);
+# the old unit, binaries and folders are removed only after the new
+# service has passed its health check.
+MIGRATING=0
+if [ -f "$UNIT_DIR/$OLD_TP_SERVICE.service" ] || [ -d /etc/dpi-proxy ] || [ -d /var/lib/dpi-proxy ]; then
+	MIGRATING=1
 	log "  moving the previous install to the nivyx names (settings kept)"
 	for d in /etc /var/lib; do
 		[ -d "$d/dpi-proxy" ] || continue
 		mkdir -p "$d/nivyx"
-		cp -an "$d/dpi-proxy/." "$d/nivyx/"
-		rm -rf "$d/dpi-proxy"
+		# file by file (not cp -n, whose exit status differs between
+		# coreutils releases)
+		(cd "$d/dpi-proxy" && find . -type f) | while read -r f; do
+			if [ ! -e "$d/nivyx/$f" ]; then
+				mkdir -p "$(dirname "$d/nivyx/$f")"
+				cp -a "$d/dpi-proxy/$f" "$d/nivyx/$f"
+			elif ! cmp -s "$d/dpi-proxy/$f" "$d/nivyx/$f" && [ ! -e "$d/nivyx/$f.legacy" ]; then
+				cp -a "$d/dpi-proxy/$f" "$d/nivyx/$f.legacy"
+				log "  kept the differing old $d/dpi-proxy/${f#./} as $d/nivyx/${f#./}.legacy"
+			fi
+		done
 	done
 	systemctl disable --now "$OLD_TP_SERVICE" "$OLD_PACKET_SERVICE" >/dev/null 2>&1 || true
-	rm -f "$UNIT_DIR/$OLD_TP_SERVICE.service" "$UNIT_DIR/$OLD_PACKET_SERVICE.service" \
-		/usr/local/bin/dpi-proxy /usr/local/bin/dpi-proxy-packet
-	rm -rf /run/dpi-proxy
-	systemctl daemon-reload
 fi
 # Two engines on TCP/443 at once is never intended: transparent mode
 # replaces packet mode as the automatic engine. Packet mode stays
@@ -301,10 +391,13 @@ log "[7/7] Starting $TP_SERVICE and checking health..."
 rm -f "$STATUS_FILE"
 systemctl start "$TP_SERVICE" || { err "start failed: journalctl -u $TP_SERVICE -n 50"; exit 4; }
 healthy=0
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	if systemctl is-active --quiet "$TP_SERVICE" \
+# the status file must come from the process systemd just started
+for _ in $(seq 1 20); do
+	pid="$(systemctl show -p MainPID --value "$TP_SERVICE" 2>/dev/null || true)"
+	if systemctl is-active --quiet "$TP_SERVICE" && [ -n "$pid" ] && [ "$pid" != 0 ] \
 		&& nft list set inet "$TP_TABLE" alive 2>/dev/null | grep -q '443' \
-		&& grep -q '^engine: running' "$STATUS_FILE" 2>/dev/null; then
+		&& grep -q '^engine: running' "$STATUS_FILE" 2>/dev/null \
+		&& grep -qx "pid: $pid" "$STATUS_FILE" 2>/dev/null; then
 		healthy=1
 		break
 	fi
@@ -330,7 +423,22 @@ if ! curl -sS -o /dev/null --max-time 15 https://example.com/ 2>/dev/null \
 	exit 4
 fi
 
+# Fail-open would let the checks above pass without the engine: they
+# count only if the same engine process is still the one running.
+[ "$(systemctl show -p MainPID --value "$TP_SERVICE" 2>/dev/null)" = "$pid" ] \
+	&& systemctl is-active --quiet "$TP_SERVICE" \
+	|| { err "the engine stopped during the DNS/HTTPS check"; exit 4; }
+
+# Committed: only now do the names of an install from before v2.3 go.
+if [ "$MIGRATING" = 1 ]; then
+	rm -f "$UNIT_DIR/$OLD_TP_SERVICE.service" "$UNIT_DIR/$OLD_PACKET_SERVICE.service" \
+		/usr/local/bin/dpi-proxy /usr/local/bin/dpi-proxy-packet
+	rm -rf /etc/dpi-proxy /var/lib/dpi-proxy /run/dpi-proxy
+	systemctl daemon-reload || true
+	log "  removed the previous (dpi-proxy) names"
+fi
 INSTALL_OK=1
+rm -rf "$BACKUP"
 echo
 log "Done. Nivyx is running and enabled at boot."
 echo

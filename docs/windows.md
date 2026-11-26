@@ -25,10 +25,57 @@ consumer hardware and networks. Field reports are welcome.
 4. Use Firefox, Chrome, Discord, … normally. No proxy arguments, no
    manual DNS changes, no per-app configuration.
 
-Everything needed is in the ZIP (`dpi-proxy.exe`, `nivyx.cmd` and `nivyx-impl.ps1`, `nivyx-completion.ps1`, `Install Nivyx.cmd`,
-`Uninstall Nivyx.cmd`, `install.ps1`, `uninstall.ps1`, the WinDivert
-driver files and license, `WINDOWS-QUICKSTART.txt`). No Visual Studio,
-MinGW, Git or Python; the installer puts `nivyx` on the PATH itself.
+No Visual Studio, MinGW, Git or Python is needed; the installer puts
+`nivyx` on the PATH itself.
+
+### What is in the ZIP
+
+| File | What it is |
+|---|---|
+| `Install Nivyx.cmd` | **Start here.** Double-click to install. |
+| `Uninstall Nivyx.cmd` | Double-click to remove. |
+| `WINDOWS-QUICKSTART.txt` | Short instructions. |
+| `dpi-proxy.exe` | Internal engine run by the service. Not for double-clicking: opened from Explorer it only explains this and changes nothing. |
+| `WinDivert.dll`, `WinDivert64.sys`, `WinDivert-LICENSE.txt` | Third-party packet driver (unmodified), see below. |
+| `install.ps1`, `uninstall.ps1` | What the two `.cmd` launchers run (manual/scripted use). |
+| `nivyx.cmd`, `nivyx-impl.ps1`, `nivyx-completion.ps1` | The `nivyx` command and its tab completion. |
+| `LICENSE.txt` | Nivyx license. |
+
+The internal files keep their names and stay at the top of the folder
+on purpose: `nivyx update` in every installed v2.2.x and v2.3.x looks
+for exactly `dpi-proxy.exe`, `WinDivert.dll` and `nivyx-impl.ps1` there,
+and refuses any other layout. Renaming them would leave those installs
+unable to update.
+
+Run from a terminal, `dpi-proxy.exe` behaves as before: without options
+it is a plain local SOCKS5 proxy (it says so on stderr; it does **not**
+protect the system), and `--help` lists the options. `--service` only
+works when the Windows service manager starts it.
+
+### Installer exit codes
+
+`Install Nivyx.cmd` and `install.ps1` exit with the same code, and the
+window says whether it worked:
+
+| Code | Meaning | What changed |
+|---|---|---|
+| 0 | installed, engine running, DNS and HTTPS checked through it | installed |
+| 1 | not elevated, or another Nivyx install/update/repair/uninstall is running | nothing |
+| 2 | a package file is missing (damaged or partial download) | nothing |
+| 3 | `install.ps1` not next to the launcher (run from inside the ZIP) | nothing |
+| 4 | the service did not start or failed its health check | a fresh install is removed again; an upgrade puts the previous version back and starts it; the last log lines are shown |
+| 5 | an upgrade failed **and** the previous version could not be started again | its files are kept in `%ProgramData%\nivyx-install-backup-*`; networking works normally |
+| 6 | Windows did not start the elevated installer for a reason other than a declined prompt (e.g. a policy that blocks elevation); the reason is printed | nothing |
+| 1223 | the UAC prompt was declined | nothing |
+
+A failed install never leaves interception behind: the new service is
+stopped and deleted, and WinDivert stops diverting the moment the
+engine exits.
+
+If the service cannot start, `dpi-proxy.log` (and the installer output)
+says why, e.g. `WinDivert could not be opened: error 577` (driver
+signature refused), `1275` (driver blocked by Windows/security
+software), `2` (`WinDivert64.sys` missing, often removed by antivirus).
 
 Before testing, stop GoodbyeDPI, zapret, other DPI tools and VPN
 packet filters (`nivyx doctor` checks for the ones it can detect).

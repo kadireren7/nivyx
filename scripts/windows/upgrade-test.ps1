@@ -1,16 +1,21 @@
 #Requires -Version 5.1
 <#
   Upgrade regression test on a real Windows machine (CI: windows-latest,
-  Administrator): the real v2.1.0 package is installed, then the candidate
-  package is installed over it, exactly as a user would. Uninstalls at the
-  end.
+  Administrator): a real released package (v2.1.0, v2.2.2, v2.3.0, ...) is
+  installed, then the candidate package is installed over it, exactly as a
+  user would. Uninstalls at the end.
 
-    powershell -ExecutionPolicy Bypass -File upgrade-test.ps1 -OldPackage <dir> -NewPackage <dir>
+    powershell -ExecutionPolicy Bypass -File upgrade-test.ps1 -OldPackage <dir> -NewPackage <dir> [-OldTag v2.1.0]
+
+  -OldTag v2.1.0 (the default) also checks that the v2.1 command wrappers
+  (dpictl*) existed before and are removed by the upgrade.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$OldPackage,
-    [Parameter(Mandatory = $true)][string]$NewPackage
+    [Parameter(Mandatory = $true)][string]$NewPackage,
+    [string]$OldTag = 'v2.1.0'
 )
+$Legacy = ($OldTag -eq 'v2.1.0')
 
 $ErrorActionPreference = 'Stop'
 $DataDir    = Join-Path $env:ProgramData 'dpi-proxy'
@@ -34,26 +39,62 @@ function Field($name) {
     if ($m) { return $m.Matches[0].Groups[1].Value } else { return '' }
 }
 function Fetch($url) { return "$(& curl.exe -sS -o NUL -w '%{http_code}' --max-time 20 $url 2>&1)" }
+# Ready = the service runs and the engine it started reported "running"
+# (the status file carries that process's pid). Bounded: 30 s.
+function Wait-Ready {
+    foreach ($i in 1..60) {
+        $w = Get-CimInstance Win32_Service -Filter "Name='dpi-proxy'" -ErrorAction SilentlyContinue
+        if ($w -and $w.State -eq 'Running' -and $w.ProcessId -and (Test-Path $StatusFile) -and
+            (Select-String -Path $StatusFile -Pattern "^pid: $($w.ProcessId)$" -Quiet) -and
+            (Select-String -Path $StatusFile -Pattern '^engine: running' -Quiet)) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+# the next heartbeat rewrite of the status file (every 10 s); bounded: 25 s
+function Wait-Heartbeat {
+    $u0 = Field updated
+    foreach ($i in 1..50) { Start-Sleep -Milliseconds 500; if ((Field updated) -ne $u0) { return } }
+}
+# What a failed HTTPS check through the engine looked like: the engine's
+# own reason, a direct probe that does not go through Nivyx (only TCP 443
+# and DNS are intercepted), and the engine's local port range.
+function Https-Evidence([string]$url) {
+    Write-Host '--- HTTPS failure evidence ---'
+    if (Test-Path $LogFile) { Get-Content $LogFile -Tail 15 | Where-Object { $_ -match '\[fail\]|\[verify\]|cannot' } | ForEach-Object { Write-Host "engine: $_" } }
+    $h = ([uri]$url).Host
+    Write-Host "direct http://$h/ (not intercepted): $(& curl.exe -sS -o NUL -w '%{http_code}' --max-time 10 "http://$h/" 2>&1)"
+    $own = @(Get-NetTCPConnection -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -ge 45000 -and $_.LocalPort -le 45999 })
+    Write-Host "engine ports 45000-45999 in use: $($own.Count) ($(@($own | Where-Object State -eq 'TimeWait').Count) in TIME_WAIT)"
+    Write-Host "service: $((Get-Service dpi-proxy -ErrorAction SilentlyContinue).Status)"
+}
+function Check-Https([string]$url, [string]$what) {
+    $c = Fetch $url
+    if ($c -notmatch '^[23]\d\d$') { Https-Evidence $url; Die "$what -> '$c'" }
+    return $c
+}
 function Version-Of { return ((& (Join-Path $InstDir 'nivyx.cmd') version 2>&1 | Out-String).Trim() -replace '^Nivyx\s+', '') }
 
-Step 'install the real v2.1.0 package'
+Step "install the real $OldTag package"
 & powershell -ExecutionPolicy Bypass -File (Join-Path $OldPackage 'install.ps1')
-if ($LASTEXITCODE -ne 0) { Die "v2.1.0 install.ps1 exited $LASTEXITCODE" }
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'v2.1.0 service not running' }
-foreach ($old in 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'dpictl-impl.ps1') {
-    if (-not (Test-Path (Join-Path $InstDir $old))) { Die "the v2.1.0 layout lacks $old; wrong baseline?" }
+if ($LASTEXITCODE -ne 0) { Die "$OldTag install.ps1 exited $LASTEXITCODE" }
+if ((Get-Service dpi-proxy).Status -ne 'Running') { Die "$OldTag service not running" }
+if ($Legacy) {
+    foreach ($old in 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'dpictl-impl.ps1') {
+        if (-not (Test-Path (Join-Path $InstDir $old))) { Die "the v2.1.0 layout lacks $old; wrong baseline?" }
+    }
 }
 $oldVersion = Version-Of
 $c = Fetch 'https://example.com/'
-if ($c -notmatch '^[23]\d\d$') { Die "v2.1.0 HTTPS -> '$c'" }
-Pass "v2.1.0 installed (version $oldVersion), legacy wrappers present, HTTPS $c"
+if ($c -notmatch '^[23]\d\d$') { Die "$OldTag HTTPS -> '$c'" }
+Pass "$OldTag installed (version $oldVersion), HTTPS $c"
 
 Step 'user state that must survive'
 Add-Content $Conf "`n[domains]`nexample.com = tlsrec"
 Restart-Service dpi-proxy
-Start-Sleep -Seconds 4
+if (-not (Wait-Ready)) { Die "$OldTag not ready after restart" }
 1..3 | ForEach-Object { Fetch 'https://example.com/' | Out-Null }
-Start-Sleep -Seconds 11
+Wait-Heartbeat
 $confHash = (Get-FileHash $Conf).Hash
 $decisionsBefore = 0
 if (Test-Path $Decisions) { $decisionsBefore = @(Get-Content $Decisions | Where-Object { -not $_.StartsWith('#') }).Count }
@@ -61,7 +102,7 @@ Pass "rule written ($decisionsBefore decisions on record)"
 
 Step 'upgrade: install the candidate package over it'
 & powershell -ExecutionPolicy Bypass -File (Join-Path $NewPackage 'install.ps1')
-if ($LASTEXITCODE -ne 0) { Die "candidate install.ps1 exited $LASTEXITCODE over v2.1.0" }
+if ($LASTEXITCODE -ne 0) { Die "candidate install.ps1 exited $LASTEXITCODE over $OldTag" }
 if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service not running after the upgrade' }
 
 Step 'after the upgrade'
@@ -82,20 +123,17 @@ if ($out -notmatch 'Manual rule') { Die "the manual rule no longer applies: $out
 Pass "version $oldVersion -> $newVersion; legacy wrappers gone; config and state intact"
 
 Step 'DNS, HTTPS, bypass, restart, doctor, repair after the upgrade'
-Start-Sleep -Seconds 11
+if (-not (Wait-Ready)) { Die 'not ready after the upgrade' }
+Wait-Heartbeat
 if ((Field dns_intercept) -ne 'doh') { Die "dns_intercept: $(Field dns_intercept)" }
 Clear-DnsClientCache
 Resolve-DnsName example.net -Type A -ErrorAction Stop | Out-Null
-$c = Fetch 'https://example.com/'
-if ($c -notmatch '^[23]\d\d$') { Die "HTTPS through the manual tlsrec rule -> '$c'" }
-$c = Fetch 'https://www.wikipedia.org/'
-if ($c -notmatch '^[23]\d\d$') { Die "HTTPS -> '$c'" }
+$c = Check-Https 'https://example.com/' 'HTTPS through the manual tlsrec rule'
+$c = Check-Https 'https://www.wikipedia.org/' 'HTTPS'
 $nv = Join-Path $InstDir 'nivyx.cmd'
 & $nv restart | Out-Null
-Start-Sleep -Seconds 3
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'not running after nivyx restart' }
-$c = Fetch 'https://example.com/'
-if ($c -notmatch '^[23]\d\d$') { Die "HTTPS after restart -> '$c'" }
+if (-not (Wait-Ready)) { Die 'not ready after nivyx restart' }
+$c = Check-Https 'https://example.com/' 'HTTPS after restart'
 & $nv doctor | Out-Host
 if ($LASTEXITCODE -ne 0) { Die 'doctor reported a failure' }
 $out = (& $nv repair 2>&1 | Out-String)
@@ -113,4 +151,4 @@ $c = Fetch 'https://example.com/'
 if ($c -notmatch '^[23]\d\d$') { Die "after uninstall -> '$c'" }
 Pass "uninstalled; HTTPS $c"
 
-Write-Host "`nWINDOWS UPGRADE v2.1.0 -> candidate: ALL CHECKS PASSED" -ForegroundColor Green
+Write-Host "`nWINDOWS UPGRADE $OldTag -> candidate: ALL CHECKS PASSED" -ForegroundColor Green

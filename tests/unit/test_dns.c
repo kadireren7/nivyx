@@ -392,6 +392,39 @@ static void	test_server_backoff_and_health(void)
 	assert(dns_resolver_healthy(&r, 103));
 }
 
+/* Every read of the health state takes the resolver's lock (the status
+ * writer and the DNS workers call dns_resolver_healthy while other workers
+ * record results: a data race TSan found in CI, run 45778878182). */
+static int	g_lock_depth;
+static int	g_lock_calls;
+
+static void	counting_lock(void *ctx, int on)
+{
+	(void)ctx;
+	g_lock_depth += on ? 1 : -1;
+	assert(g_lock_depth == 0 || g_lock_depth == 1);
+	g_lock_calls++;
+}
+
+static void	test_health_read_takes_lock(void)
+{
+	t_dns_resolver	r;
+	t_mock			m;
+
+	memset(&m, 0, sizeof(m));
+	dns_resolver_init(&r, 2, mock_transport, &m, 1000, 1);
+	r.lock = counting_lock;
+	r.lock_ctx = NULL;
+	g_lock_depth = 0;
+	g_lock_calls = 0;
+	assert(dns_resolver_healthy(&r, 100));
+	assert(g_lock_calls == 2 && g_lock_depth == 0);
+	r.health[0].skip_until = 200;
+	r.health[1].skip_until = 200;
+	assert(!dns_resolver_healthy(&r, 100));
+	assert(g_lock_calls == 4 && g_lock_depth == 0);
+}
+
 static void	test_udp_server_list_parse(void)
 {
 	t_dns_udp_servers	s;
@@ -515,6 +548,7 @@ int	main(void)
 	test_all_servers_fail();
 	test_cache_hit_and_ttl_expiry_with_clamps();
 	test_server_backoff_and_health();
+	test_health_read_takes_lock();
 	test_udp_server_list_parse();
 	test_local_names_and_rcode();
 	printf("test_dns: OK\n");

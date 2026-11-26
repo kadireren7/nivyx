@@ -1,15 +1,27 @@
 #!/bin/sh
 #
-# dpi-proxy for macOS — uninstaller.
+# Nivyx for macOS — uninstaller.
 #
-#   sudo ./uninstall.sh
+#   sudo ./uninstall.sh           remove Nivyx, keep your settings,
+#                                 learned decisions and logs
+#   sudo ./uninstall.sh --purge   remove those too
 #
-# Stops the service and removes everything install.sh put on the
-# system: the launchd job, the binaries, the settings, learned
-# decisions, logs, Nivyx's PF anchor and its PF enable reference.
-# Nothing else is touched: other PF anchors, the main ruleset,
-# /etc/pf.conf and other programs' PF references stay as they are.
+# Stops the service and removes what install.sh put on the system: the
+# launchd job, the binaries, man page, completion, Nivyx's PF anchor
+# rules and its PF enable reference. Nothing else is touched: other PF
+# anchors, the main ruleset, /etc/pf.conf and other programs' PF
+# references stay as they are. (The same on every platform: a plain
+# uninstall keeps your data, --purge removes everything.)
 set -u
+
+PURGE=0
+for arg in "$@"; do
+	case "$arg" in
+	--purge) PURGE=1 ;;
+	-h | --help) sed -n '3,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	*) echo "uninstall.sh: unknown option: $arg (only --purge)" >&2; exit 1 ;;
+	esac
+done
 
 LABEL="io.github.kadireren7.dpi-proxy"
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
@@ -21,6 +33,53 @@ log() { printf '==> %s\n' "$1"; }
 
 [ "$(uname -s)" = Darwin ] || { echo "uninstall.sh: this is for macOS" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || { echo "uninstall.sh: run it with sudo:  sudo ./uninstall.sh" >&2; exit 1; }
+
+# One install/update/repair/uninstall at a time: install.sh, uninstall.sh
+# and nivyx update/repair share this lock (macOS has no flock(1)). The lock
+# is a symlink whose target is the owner's pid, created atomically by
+# `ln -s` (it never exists without its owner). A lock whose owner is gone is
+# removed only under a takeover guard and only after re-checking it still
+# names that dead owner, so two processes can never both hold it.
+ADMIN_LOCK=/var/run/nivyx-admin.lock
+ADMIN_LOCK_HELD=0
+take_admin_lock() {
+	_guard="$ADMIN_LOCK.takeover"
+	_tries=0
+	while :; do
+		if [ ! -d "$ADMIN_LOCK" ] && ln -s "$$" "$ADMIN_LOCK" 2>/dev/null; then
+			ADMIN_LOCK_HELD=1
+			return 0
+		fi
+		_tries=$((_tries + 1))
+		[ "$_tries" -le 50 ] || { echo "could not take $ADMIN_LOCK" >&2; exit 1; }
+		_owner="$(readlink "$ADMIN_LOCK" 2>/dev/null || true)"
+		if [ -n "$_owner" ] && kill -0 "$_owner" 2>/dev/null; then
+			echo "another Nivyx install, update, repair or uninstall is running (pid $_owner); try again when it has finished" >&2
+			exit 1
+		fi
+		# owner gone (or the lock vanished meanwhile): one taker at a time
+		if mkdir "$_guard" 2>/dev/null; then
+			_now="$(readlink "$ADMIN_LOCK" 2>/dev/null || true)"
+			if [ -d "$ADMIN_LOCK" ] && [ ! -L "$ADMIN_LOCK" ]; then
+				rm -rf "$ADMIN_LOCK"	# lock directory of a pre-release build
+			elif [ -n "$_now" ] && [ "$_now" = "$_owner" ] && ! kill -0 "$_now" 2>/dev/null; then
+				rm -f "$ADMIN_LOCK"
+			fi
+			rmdir "$_guard" 2>/dev/null || true
+		elif [ -n "$(find "$_guard" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+			rmdir "$_guard" 2>/dev/null || true	# left by a taker that died mid-takeover
+		else
+			sleep 0.1
+		fi
+	done
+}
+release_admin_lock() {
+	[ "$ADMIN_LOCK_HELD" = 1 ] || return 0
+	[ "$(readlink "$ADMIN_LOCK" 2>/dev/null)" = "$$" ] && rm -f "$ADMIN_LOCK"
+	ADMIN_LOCK_HELD=0
+}
+take_admin_lock
+trap release_admin_lock EXIT
 
 log "Stopping the service..."
 if launchctl print "system/$LABEL" >/dev/null 2>&1; then
@@ -60,14 +119,19 @@ rm -f /usr/local/share/man/man1/nivyx.1 /usr/local/share/zsh/site-functions/_niv
 for legacy in /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl; do
 	[ -f "$legacy" ] && [ ! -L "$legacy" ] && grep -q 'dpi-proxy' "$legacy" 2>/dev/null && rm -f "$legacy"
 done
-created=""
-[ -f "$VAR_DIR/created-dirs" ] && created="$(sort -r -u "$VAR_DIR/created-dirs")"
-rm -rf /usr/local/etc/dpi-proxy "$VAR_DIR" "$RUN_DIR"
-rm -f /var/log/dpi-proxy.log /var/log/dpi-proxy.log.1 /var/log/dpi-proxy.stderr.log
-# parent directories install.sh had to create, if nothing else uses them
-for d in $created; do
-	rmdir "$d" 2>/dev/null || true
-done
+rm -rf "$RUN_DIR"
+rm -rf "$VAR_DIR"/update-rollback.* "$VAR_DIR/rollback" 2>/dev/null || true
+if [ "$PURGE" = 1 ]; then
+	log "--purge: removing settings, learned decisions and logs..."
+	created=""
+	[ -f "$VAR_DIR/created-dirs" ] && created="$(sort -r -u "$VAR_DIR/created-dirs")"
+	rm -rf /usr/local/etc/dpi-proxy "$VAR_DIR"
+	rm -f /var/log/dpi-proxy.log /var/log/dpi-proxy.log.1 /var/log/dpi-proxy.stderr.log
+	# parent directories install.sh had to create, if nothing else uses them
+	for d in $created; do
+		rmdir "$d" 2>/dev/null || true
+	done
+fi
 
 # answers cached while the service ran came from the trusted resolvers;
 # start fresh with the network's own
@@ -78,8 +142,10 @@ left=""
 [ -e "$PLIST" ] && left="$left $PLIST"
 [ -e /usr/local/bin/dpi-proxy ] && left="$left /usr/local/bin/dpi-proxy"
 [ -e /usr/local/bin/nivyx ] && left="$left /usr/local/bin/nivyx"
-[ -e /usr/local/etc/dpi-proxy ] && left="$left /usr/local/etc/dpi-proxy"
-[ -e "$VAR_DIR" ] && left="$left $VAR_DIR"
+if [ "$PURGE" = 1 ]; then
+	[ -e /usr/local/etc/dpi-proxy ] && left="$left /usr/local/etc/dpi-proxy"
+	[ -e "$VAR_DIR" ] && left="$left $VAR_DIR"
+fi
 launchctl print "system/$LABEL" >/dev/null 2>&1 && left="$left launchd-job"
 pfctl -a "$ANCHOR" -s nat 2>/dev/null | grep -q . && left="$left pf-anchor"
 pfctl -a "$ANCHOR" -s rules 2>/dev/null | grep -q . && left="$left pf-anchor"
@@ -89,5 +155,10 @@ if [ -n "$left" ]; then
 	exit 1
 fi
 log "Nivyx is uninstalled; networking is back to normal."
+if [ "$PURGE" != 1 ]; then
+	for kept in /usr/local/etc/dpi-proxy "$VAR_DIR" /var/log/dpi-proxy.log; do
+		[ -e "$kept" ] && echo "    kept $kept (remove with: sudo ./uninstall.sh --purge)"
+	done
+fi
 echo "    (macOS keeps the now empty PF anchor name $ANCHOR registered until"
 echo "    the next restart; it contains no rules and does nothing.)"

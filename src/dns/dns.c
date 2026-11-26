@@ -212,18 +212,27 @@ void	dns_cache_flush(t_dns_resolver *r)
 	memset(r->cache, 0, sizeof(r->cache));
 }
 
+/* Takes the lock like every other access to the health state: it is
+ * called from the status writer and the DNS workers while other workers
+ * record results (TSan, CI run 45778878182). */
 int	dns_resolver_healthy(const t_dns_resolver *r, int64_t now)
 {
 	size_t	i;
+	int		healthy;
 
+	if (r->lock != NULL)
+		r->lock(r->lock_ctx, 1);
+	healthy = 0;
 	i = 0;
-	while (i < r->server_count)
+	while (i < r->server_count && !healthy)
 	{
 		if (r->health[i].skip_until <= now)
-			return (1);
+			healthy = 1;
 		i++;
 	}
-	return (0);
+	if (r->lock != NULL)
+		r->lock(r->lock_ctx, 0);
+	return (healthy);
 }
 
 static int	name_ieq(const char *a, const char *b)

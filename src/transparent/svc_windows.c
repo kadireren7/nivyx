@@ -62,6 +62,9 @@ static void WINAPI	service_main(DWORD argc, LPSTR *argv)
 	g_rc = run_transparent_server(&g_opt);
 	/* a failed start ends in an error exit code, which lets the
 	 * service's recovery settings restart it */
+	/* service-specific code 1: "the engine could not start", shown by
+	 * `sc query dpi-proxy`; the reason is in dpi-proxy.log */
+	g_status.dwServiceSpecificExitCode = (g_rc == 0) ? 0 : 1;
 	report(SERVICE_STOPPED, g_rc == 0 ? NO_ERROR : ERROR_SERVICE_SPECIFIC_ERROR,
 		0);
 }

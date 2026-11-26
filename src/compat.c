@@ -55,6 +55,11 @@ int	compat_addr_in_use(void)
 	return (WSAGetLastError() == WSAEADDRINUSE);
 }
 
+int	compat_err_addr_in_use(int err)
+{
+	return (err == WSAEADDRINUSE);
+}
+
 int	compat_so_error(int fd)
 {
 	int	err;
@@ -154,6 +159,11 @@ int	compat_interrupted(void)
 int	compat_addr_in_use(void)
 {
 	return (errno == EADDRINUSE || errno == EADDRNOTAVAIL);
+}
+
+int	compat_err_addr_in_use(int err)
+{
+	return (err == EADDRINUSE || err == EADDRNOTAVAIL);
 }
 
 int	compat_so_error(int fd)

@@ -91,7 +91,12 @@ status_short() {
 		echo "Failures: 0"
 		return 0
 	fi
-	if [ "$(field engine)" = running ] && [ "$(field pf)" = enabled ]; then
+	# the engine rewrites the file every 10 s (heartbeat)
+	updated="$(field updated)"; age=0
+	case "$updated" in '' | *[!0-9]*) ;; *) age=$(( $(date +%s) - updated )) ;; esac
+	if [ "$(field engine)" = running ] && [ "$age" -gt 45 ]; then
+		echo "Protection: ${C_RED}Degraded (engine not responding: last heartbeat ${age}s ago)${C_RESET}"
+	elif [ "$(field engine)" = running ] && [ "$(field pf)" = enabled ]; then
 		echo "Protection: ${C_GREEN}Active${C_RESET}"
 	elif [ "$(field engine)" = running ]; then
 		echo "Protection: ${C_YELLOW}Degraded ($(field pf))${C_RESET}"
@@ -738,6 +743,8 @@ cannot() { UNREPAIRABLE=$((UNREPAIRABLE + 1)); printf '%s[ !!  ]%s %s\n' "$C_RED
 
 do_repair() {
 	need_root repair
+	take_admin_lock
+	trap release_admin_lock EXIT
 	echo "$SELF repair: checking Nivyx-owned state"
 	echo
 	if [ ! -f "$PLIST" ]; then
@@ -849,6 +856,147 @@ do_repair() {
 RELEASE_API="${NIVYX_RELEASE_API:-https://api.github.com/repos/kadireren7/nivyx/releases/latest}"
 OFFICIAL_PREFIX="https://github.com/kadireren7/nivyx/releases/download/"
 
+# A test override may only point at this machine: an update source
+# outside the official repository is never used for real traffic.
+is_loopback_url() {
+	case "$1" in
+	http://127.0.0.1:* | http://127.0.0.1/* | http://localhost:* | http://localhost/* | \
+		https://127.0.0.1:* | https://127.0.0.1/* | https://localhost:* | https://localhost/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# One install/update/repair/uninstall at a time: install.sh, uninstall.sh
+# and nivyx update/repair share this lock (macOS has no flock(1)). The lock
+# is a symlink whose target is the owner's pid, created atomically by
+# `ln -s` (it never exists without its owner). A lock whose owner is gone is
+# removed only under a takeover guard and only after re-checking it still
+# names that dead owner, so two processes can never both hold it.
+ADMIN_LOCK=/var/run/nivyx-admin.lock
+ADMIN_LOCK_HELD=0
+take_admin_lock() {
+	_guard="$ADMIN_LOCK.takeover"
+	_tries=0
+	while :; do
+		if [ ! -d "$ADMIN_LOCK" ] && ln -s "$$" "$ADMIN_LOCK" 2>/dev/null; then
+			ADMIN_LOCK_HELD=1
+			return 0
+		fi
+		_tries=$((_tries + 1))
+		[ "$_tries" -le 50 ] || { echo "could not take $ADMIN_LOCK" >&2; exit 1; }
+		_owner="$(readlink "$ADMIN_LOCK" 2>/dev/null || true)"
+		if [ -n "$_owner" ] && kill -0 "$_owner" 2>/dev/null; then
+			echo "another Nivyx install, update, repair or uninstall is running (pid $_owner); try again when it has finished" >&2
+			exit 1
+		fi
+		# owner gone (or the lock vanished meanwhile): one taker at a time
+		if mkdir "$_guard" 2>/dev/null; then
+			_now="$(readlink "$ADMIN_LOCK" 2>/dev/null || true)"
+			if [ -d "$ADMIN_LOCK" ] && [ ! -L "$ADMIN_LOCK" ]; then
+				rm -rf "$ADMIN_LOCK"	# lock directory of a pre-release build
+			elif [ -n "$_now" ] && [ "$_now" = "$_owner" ] && ! kill -0 "$_now" 2>/dev/null; then
+				rm -f "$ADMIN_LOCK"
+			fi
+			rmdir "$_guard" 2>/dev/null || true
+		elif [ -n "$(find "$_guard" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+			rmdir "$_guard" 2>/dev/null || true	# left by a taker that died mid-takeover
+		else
+			sleep 0.1
+		fi
+	done
+}
+release_admin_lock() {
+	[ "$ADMIN_LOCK_HELD" = 1 ] || return 0
+	[ "$(readlink "$ADMIN_LOCK" 2>/dev/null)" = "$$" ] && rm -f "$ADMIN_LOCK"
+	ADMIN_LOCK_HELD=0
+}
+
+# ---- release signature ---------------------------------------------------
+# The release manifest (nivyx-release.manifest) must carry a valid
+# signature (nivyx-release.manifest.sig) by one of these keys, name the
+# version being installed and list the download's SHA-256; checked by the
+# installed engine before anything downloaded is unpacked or run.
+# Enforced once this list holds a key. It is empty until the maintainer
+# sets up the offline signing key (docs/release-signing.md): until then
+# the SHA256SUMS check is the only one, as in earlier versions.
+# BEGIN RELEASE KEYS (from scripts/release-keys.txt by scripts/release-keys.sh sync)
+RELEASE_KEYS='
+'
+# END RELEASE KEYS
+MANIFEST_NAME=nivyx-release.manifest
+
+# The download URL of release asset $1 ("" if the release has none).
+asset_url() {
+	_pat="$(printf '%s' "$1" | sed 's/\./\\./g')"
+	printf '%s' "$json" | grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*/'"$_pat"'"' \
+		| sed 's/.*"\(http[^"]*\)"$/\1/' | head -n 1
+}
+
+# Official repository only; with the test override, this machine only.
+check_download_url() {
+	if [ -z "${NIVYX_RELEASE_API:-}" ]; then
+		case "$1" in "$OFFICIAL_PREFIX"*) return 0 ;; esac
+		err "refusing a download URL outside the official repository"
+	else
+		is_loopback_url "$RELEASE_API" && is_loopback_url "$1" && return 0
+		err "NIVYX_RELEASE_API is for the test suite and must point at this machine (http://127.0.0.1:PORT/...); refusing $1"
+	fi
+	exit 1
+}
+
+# Called by do_update after the SHA256SUMS check (uses asset, got, current,
+# latest). Exits on any failure.
+verify_release_signature() {
+	keys="$work/release-keys"; man="$work/$MANIFEST_NAME"; sig="$work/$MANIFEST_NAME.sig"
+	if [ -n "${NIVYX_TEST_RELEASE_KEYS:-}" ]; then
+		# the test suite's temporary keys; only together with the
+		# loopback-only NIVYX_RELEASE_API (checked before this)
+		[ -n "${NIVYX_RELEASE_API:-}" ] || { err "NIVYX_TEST_RELEASE_KEYS is for the test suite (with NIVYX_RELEASE_API)"; exit 1; }
+		echo "note: using test release keys $NIVYX_TEST_RELEASE_KEYS" >&2
+		grep '^ed25519 ' "$NIVYX_TEST_RELEASE_KEYS" >"$keys" || true
+	else
+		printf '%s\n' "$RELEASE_KEYS" | grep '^ed25519 ' >"$keys" || true
+	fi
+	if [ ! -s "$keys" ]; then
+		echo "note: release signatures are not checked yet (no release key configured in this version)"
+		return 0
+	fi
+	man_url="$(asset_url "$MANIFEST_NAME")"; sig_url="$(asset_url "$MANIFEST_NAME.sig")"
+	if [ -z "$man_url" ] || [ -z "$sig_url" ]; then
+		err "release $latest is not signed (no $MANIFEST_NAME and/or $MANIFEST_NAME.sig); nothing was installed"
+		exit 1
+	fi
+	check_download_url "$man_url"; check_download_url "$sig_url"
+	curl -fsSL --max-time 60 --max-filesize 1048576 -o "$man" "$man_url" \
+		&& curl -fsSL --max-time 60 --max-filesize 65536 -o "$sig" "$sig_url" \
+		|| { err "could not download the release signature; nothing was installed"; exit 1; }
+	[ -x /usr/local/bin/dpi-proxy ] || { err "/usr/local/bin/dpi-proxy is missing: cannot check the release signature; nothing was installed"; exit 1; }
+	if ! out="$(/usr/local/bin/dpi-proxy --verify-release "$keys" "$man" "$sig" 2>&1)"; then
+		err "the release signature is not valid: ${out:-no result}; nothing was installed"
+		exit 1
+	fi
+	if [ "$(sed -n 1p "$man")" != "nivyx-release-manifest 1" ] || [ "$(grep -c '^product nivyx$' "$man")" != 1 ] \
+		|| [ "$(grep -c '^version ' "$man")" != 1 ]; then
+		err "the signed manifest has an unknown format; nothing was installed"
+		exit 1
+	fi
+	mver="$(sed -n 's/^version \([0-9][0-9.]*\)$/\1/p' "$man")"
+	if [ "$mver" != "$latest" ]; then
+		err "the signed manifest is for version ${mver:-?}, the release claims $latest: refusing a substituted or replayed release; nothing was installed"
+		exit 1
+	fi
+	if ! ver_gt "$mver" "${current:-0}"; then
+		err "the signed release $mver is not newer than the installed ${current:-version}: refusing a downgrade; nothing was installed"
+		exit 1
+	fi
+	mwant="$(awk -v a="$asset" 'NF == 3 && $1 == "sha256" && $3 == a { print $2 }' "$man")"
+	if [ "$(printf '%s' "$mwant" | grep -c .)" != 1 ] || [ "$mwant" != "$got" ]; then
+		err "$asset does not match the signed manifest; nothing was installed"
+		exit 1
+	fi
+	echo "Release signature verified (${out#verified: })."
+}
+
 # True if $1 is strictly newer than $2 (numeric x.y.z comparison).
 ver_gt() {
 	awk -v a="$1" -v b="$2" 'BEGIN {
@@ -897,16 +1045,15 @@ do_update() {
 	*) err "no release asset for this architecture ($(uname -m))"; exit 1 ;;
 	esac
 	asset="nivyx-macos-$arch.zip"
-	url="$(printf '%s' "$json" | grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*/'"$asset"'"' | sed 's/.*"\(http[^"]*\)"$/\1/' | head -n 1)"
-	sums_url="$(printf '%s' "$json" | grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*/SHA256SUMS"' | sed 's/.*"\(http[^"]*\)"$/\1/' | head -n 1)"
+	url="$(asset_url "$asset")"
+	sums_url="$(asset_url SHA256SUMS)"
 	[ -n "$url" ] && [ -n "$sums_url" ] || { err "release $latest has no $asset and/or SHA256SUMS"; exit 1; }
-	if [ -z "${NIVYX_RELEASE_API:-}" ]; then
-		case "$url" in "$OFFICIAL_PREFIX"*) ;; *) err "refusing a download URL outside the official repository"; exit 1 ;; esac
-		case "$sums_url" in "$OFFICIAL_PREFIX"*) ;; *) err "refusing a download URL outside the official repository"; exit 1 ;; esac
-	fi
+	check_download_url "$url"
+	check_download_url "$sums_url"
 
+	take_admin_lock
 	work="$(mktemp -d /private/var/tmp/nivyx-update.XXXXXX)"
-	trap 'rm -rf "$work"' EXIT
+	trap 'rm -rf "$work"; release_admin_lock' EXIT
 	echo "Downloading $asset ..."
 	curl -fsSL --max-time 300 -o "$work/$asset" "$url" || { err "download failed"; exit 1; }
 	curl -fsSL --max-time 60 -o "$work/SHA256SUMS" "$sums_url" || { err "could not download SHA256SUMS"; exit 1; }
@@ -917,7 +1064,18 @@ do_update() {
 		exit 1
 	fi
 	echo "SHA-256 verified."
+	verify_release_signature
 
+	# only plain files and folders inside nivyx-macos-<arch>/: no links,
+	# no absolute or ".." paths
+	names="$(zipinfo -1 "$work/$asset" 2>/dev/null)" && modes="$(zipinfo -s "$work/$asset" 2>/dev/null)" \
+		|| { err "could not read the download"; exit 1; }
+	if printf '%s\n' "$modes" | grep -q '^l' \
+		|| printf '%s\n' "$names" | grep -vE "^nivyx-macos-$arch(/|\$)" | grep -q . \
+		|| printf '%s\n' "$names" | grep -E '(^|/)\.\.(/|$)' | grep -q .; then
+		err "the package contains unexpected paths or links; nothing was installed"
+		exit 1
+	fi
 	ditto -x -k "$work/$asset" "$work" || { err "could not unpack the download"; exit 1; }
 	pkg="$work/nivyx-macos-$arch"
 	[ -x "$pkg/dpi-proxy" ] && [ -f "$pkg/nivyx" ] || { err "unexpected package layout; nothing was installed"; exit 1; }
@@ -926,31 +1084,58 @@ do_update() {
 	[ "$("$pkg/dpi-proxy" --version 2>/dev/null | sed -n 's/^dpi-proxy //p')" = "$latest" ] \
 		|| { err "the downloaded engine is not version $latest; nothing was installed"; exit 1; }
 
-	bak="/usr/local/var/dpi-proxy/rollback"
-	mkdir -p "$bak"
-	cp -p /usr/local/bin/dpi-proxy "$bak/dpi-proxy"
-	cp -p /usr/local/bin/nivyx "$bak/nivyx"
-	install -m 755 -o root -g wheel "$pkg/dpi-proxy" /usr/local/bin/.dpi-proxy.new
-	install -m 755 -o root -g wheel "$pkg/nivyx" /usr/local/bin/.nivyx.new
-	mv -f /usr/local/bin/.dpi-proxy.new /usr/local/bin/dpi-proxy
-	mv -f /usr/local/bin/.nivyx.new /usr/local/bin/nivyx
-	[ -f "$pkg/nivyx.1" ] && install -d /usr/local/share/man/man1 && install -m 644 "$pkg/nivyx.1" /usr/local/share/man/man1/nivyx.1
-	echo "Installed $latest; restarting the service ..."
+	# every file the update replaces is backed up first, under a unique name
+	targets="/usr/local/bin/dpi-proxy /usr/local/bin/nivyx /usr/local/share/man/man1/nivyx.1 /usr/local/share/zsh/site-functions/_nivyx"
+	mkdir -p /usr/local/var/dpi-proxy
+	bak="$(mktemp -d /usr/local/var/dpi-proxy/update-rollback.XXXXXX)" || { err "cannot create a backup folder; nothing was installed"; exit 1; }
+	: >"$bak/absent"
+	for t in $targets; do
+		if [ -e "$t" ]; then
+			mkdir -p "$bak/files$(dirname "$t")" && cp -p "$t" "$bak/files$t" \
+				|| { err "cannot back up $t (disk full?); nothing was installed"; rm -rf "$bak"; exit 1; }
+		else
+			printf '%s\n' "$t" >>"$bak/absent"
+		fi
+	done
+	# staged next to the targets, so the swap is a rename; a failure here
+	# (disk full, ...) leaves the installed files as they were
+	new_eng="$(mktemp /usr/local/bin/.dpi-proxy.XXXXXX)" && new_cli="$(mktemp /usr/local/bin/.nivyx.XXXXXX)" \
+		&& install -m 755 -o root -g wheel "$pkg/dpi-proxy" "$new_eng" \
+		&& install -m 755 -o root -g wheel "$pkg/nivyx" "$new_cli" \
+		|| { err "cannot stage the new files (disk full?); nothing was installed"; rm -f "${new_eng:-}" "${new_cli:-}"; rm -rf "$bak"; exit 1; }
+	mv -f "$new_eng" /usr/local/bin/dpi-proxy
+	mv -f "$new_cli" /usr/local/bin/nivyx
 	rc=0
-	launchctl kickstart -k "system/$LABEL" || rc=1
+	if [ -f "$pkg/nivyx.1" ]; then
+		install -d /usr/local/share/man/man1 && install -m 644 "$pkg/nivyx.1" /usr/local/share/man/man1/nivyx.1 || rc=1
+	fi
+	if [ -f "$pkg/_nivyx" ]; then
+		install -d /usr/local/share/zsh/site-functions && install -m 644 "$pkg/_nivyx" /usr/local/share/zsh/site-functions/_nivyx || rc=1
+	fi
+	echo "Installed $latest; restarting the service ..."
+	[ "$rc" = 0 ] && { launchctl kickstart -k "system/$LABEL" || rc=1; }
 	if [ "$rc" = 0 ] && update_healthy; then
+		rm -rf "$bak"
 		echo "Health check passed."
 		echo "Nivyx updated to $latest. Configuration and learned state were kept."
-		rm -rf "$bak"
 		return 0
 	fi
 	err "the new version failed its health check; restoring ${current:-the previous version}"
-	mv -f "$bak/dpi-proxy" /usr/local/bin/dpi-proxy
-	mv -f "$bak/nivyx" /usr/local/bin/nivyx
+	for t in $targets; do
+		if [ -e "$bak/files$t" ]; then
+			cp -p "$bak/files$t" "$t.rollback" && mv -f "$t.rollback" "$t"
+		elif grep -qxF "$t" "$bak/absent"; then
+			rm -f "$t"
+		fi
+	done
 	launchctl kickstart -k "system/$LABEL" || true
-	if update_healthy; then err "rolled back; Nivyx ${current:-previous} is running again"
-	else err "rollback finished but the service is still unhealthy: sudo $SELF repair"; fi
-	rm -rf "$bak"
+	if update_healthy; then
+		rm -rf "$bak"
+		err "rolled back; Nivyx ${current:-previous} is running again"
+	else
+		err "rollback finished but the service is still unhealthy: sudo $SELF repair"
+		err "the previous files are kept in $bak"
+	fi
 	exit 1
 }
 

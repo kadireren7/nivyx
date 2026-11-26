@@ -93,7 +93,7 @@ sudo nivyx repair | grep -q 'nothing else wrong' || die "repair found something 
 pass "DNS over DoH, HTTPS, bypass rule, restart, doctor and repair all fine"
 
 stepn "uninstall removes everything of ours"
-( cd "$NEW" && sudo ./uninstall.sh ) || die "uninstall.sh failed"
+( cd "$NEW" && sudo ./uninstall.sh --purge ) || die "uninstall.sh --purge failed"
 for f in /Library/LaunchDaemons/$LABEL.plist /usr/local/bin/dpi-proxy /usr/local/bin/nivyx /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl /usr/local/etc/dpi-proxy /usr/local/var/dpi-proxy /var/run/dpi-proxy; do
 	[ -e "$f" ] && die "$f left behind"
 done

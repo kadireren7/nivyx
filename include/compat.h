@@ -41,6 +41,8 @@ int		compat_connect_pending(void);
 /* The last connect() failed because the local address/port (or the
  * whole 4-tuple, e.g. still in TIME_WAIT) is in use. */
 int		compat_addr_in_use(void);
+/* the same for an error code (SO_ERROR of a non-blocking connect) */
+int		compat_err_addr_in_use(int err);
 /* The last socket call failed only because it was interrupted. */
 int		compat_interrupted(void);
 int		compat_so_error(int fd);

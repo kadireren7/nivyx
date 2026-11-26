@@ -22,13 +22,100 @@ die() {
 }
 field() { sed -n "s/^$1: //p" "$STATUS" | head -n 1; }
 wait_status() { sleep 11; }	# status is rewritten every 10 s
+# Ready = systemd runs the service and the engine it started reported
+# "running" (the status file carries that process's pid). Bounded: 30 s.
+engine_ready() {
+	local i pid
+	for i in $(seq 1 60); do
+		pid="$(systemctl show -p MainPID --value nivyx 2>/dev/null || true)"
+		if systemctl is-active --quiet nivyx && [ -n "$pid" ] && [ "$pid" != 0 ] \
+			&& grep -qx "pid: $pid" "$STATUS" 2>/dev/null && grep -q '^engine: running' "$STATUS" 2>/dev/null; then
+			return 0
+		fi
+		sleep 0.5
+	done
+	return 1
+}
 fetch() { curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$1" 2>&1 || true; }
 ok() { [[ "$1" =~ ^[23][0-9][0-9]$ ]]; }
+
+# A copy of this tree broken on purpose, for the failure tests: "build"
+# does not compile, "start" installs a unit that cannot start.
+broken_tree() {
+	local dst
+	dst="$(mktemp -d)"
+	tar --exclude=.git -C "$ROOT" -cf - . | tar -C "$dst" -xf -
+	case "$1" in
+	build) printf '\n#error injected by the test suite\n' >>"$dst/src/main.c" ;;
+	start) sed -i 's#^\[Service\]$#[Service]\nExecStartPre=/bin/false#' "$dst/systemd/nivyx.service" ;;
+	esac
+	printf '%s\n' "$dst"
+}
+sha() { sudo sha256sum "$1" | cut -d' ' -f1; }
 
 stepn install
 sudo "$ROOT/scripts/install.sh" || die "install.sh failed"
 systemctl is-active --quiet nivyx || die "service not active"
 pass "installed; installer health check (DNS + HTTPS through it) passed"
+
+stepn "a failed build leaves the running install alone"
+pid0="$(systemctl show -p MainPID --value nivyx)"
+eng0="$(sha /usr/local/bin/nivyx-engine)"
+t="$(broken_tree build)"
+rc=0; out="$(sudo "$t/scripts/install.sh" 2>&1)" || rc=$?
+rm -rf "$t"
+[ "$rc" = 3 ] || { echo "$out"; die "install.sh with a broken build exited $rc (expected 3)"; }
+echo "$out" | grep -q 'existing Nivyx installation is untouched' || die "no 'untouched' message"
+[ "$(systemctl show -p MainPID --value nivyx)" = "$pid0" ] || die "the running service was stopped or restarted by a failed build"
+sudo nft list table inet dpi_proxy_tp >/dev/null 2>&1 || die "the interception table was removed by a failed build"
+[ "$(sha /usr/local/bin/nivyx-engine)" = "$eng0" ] || die "the installed engine was replaced by a failed build"
+c="$(fetch https://example.com/)"; ok "$c" || die "after a failed build -> '$c'"
+pass "exit 3; same engine process ($pid0), table and binary; HTTPS $c"
+
+stepn "one install/update/repair/uninstall at a time (U4)"
+# another administrative operation holds the lock: every other one refuses
+# and leaves the running install alone; once it is released they work again
+# (-o: flock itself holds the lock, not the sleep it runs)
+sudo flock -o /run/nivyx-admin.lock sleep 120 &
+holder=$!
+for i in $(seq 1 25); do sudo flock -n /run/nivyx-admin.lock true 2>/dev/null || break; sleep 0.2; done
+pid0="$(systemctl show -p MainPID --value nivyx)"
+for what in "nivyx repair" "uninstall.sh" "install.sh"; do
+	case "$what" in
+	"nivyx repair") rc=0; out="$(sudo nivyx repair 2>&1)" || rc=$? ;;
+	uninstall.sh) rc=0; out="$(sudo "$ROOT/scripts/uninstall.sh" 2>&1)" || rc=$? ;;
+	install.sh) rc=0; out="$(sudo "$ROOT/scripts/install.sh" 2>&1)" || rc=$? ;;
+	esac
+	[ "$rc" != 0 ] || { echo "$out"; die "$what ran while another operation held the lock"; }
+	grep -q 'another Nivyx install, update, repair or uninstall is running' <<<"$out" || { echo "$out"; die "$what: no lock message"; }
+done
+systemctl is-active --quiet nivyx && [ "$(systemctl show -p MainPID --value nivyx)" = "$pid0" ] \
+	|| die "a refused operation touched the service"
+[ -x /usr/local/bin/nivyx-engine ] && [ -f /etc/systemd/system/nivyx.service ] || die "a refused operation removed files"
+sudo pkill -f 'flock -o /run/nivyx-admin.lock sleep 120' || true
+wait "$holder" 2>/dev/null || true
+for i in $(seq 1 25); do sudo flock -n /run/nivyx-admin.lock true 2>/dev/null && break; sleep 0.2; done
+out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "repair failed after the lock was released"; }
+pass "repair, uninstall and install refused while locked (service untouched); repair works once released"
+
+stepn "a reinstall that fails its health check restores the previous install"
+unit0="$(sha /etc/systemd/system/nivyx.service)"
+cli0="$(sha /usr/local/bin/nivyx)"
+conf0="$(sha /etc/nivyx/strategy.conf)"
+t="$(broken_tree start)"
+rc=0; out="$(sudo "$t/scripts/install.sh" 2>&1)" || rc=$?
+rm -rf "$t"
+[ "$rc" = 4 ] || { echo "$out"; die "install.sh with a unit that cannot start exited $rc (expected 4)"; }
+echo "$out" | grep -q 'previous state restored' || { echo "$out"; die "no rollback message"; }
+systemctl is-active --quiet nivyx || die "the previous service is not running again"
+[ "$(sha /etc/systemd/system/nivyx.service)" = "$unit0" ] || die "the previous unit was not restored"
+[ "$(sha /usr/local/bin/nivyx-engine)" = "$eng0" ] || die "the previous engine was not restored"
+[ "$(sha /usr/local/bin/nivyx)" = "$cli0" ] || die "the previous CLI was not restored"
+[ "$(sha /etc/nivyx/strategy.conf)" = "$conf0" ] || die "the config changed"
+ls -d /var/tmp/nivyx-install-backup.* >/dev/null 2>&1 && die "a successful rollback left its backup behind"
+for _ in $(seq 1 30); do grep -q '^engine: running' "$STATUS" 2>/dev/null && break; sleep 0.5; done
+c="$(fetch https://example.com/)"; ok "$c" || die "after the rollback -> '$c'"
+pass "exit 4; unit, engine, CLI and config restored; service running; HTTPS $c"
 
 stepn "normal HTTPS works and is intercepted"
 for u in https://example.com/ https://www.wikipedia.org/ https://github.com/; do
@@ -58,7 +145,7 @@ pass "5 requests -> $delta flows"
 stepn "bypass path: forced tlsrec rule for example.com"
 printf '\n[domains]\nexample.com = tlsrec\n' | sudo tee -a "$CONF" >/dev/null
 sudo systemctl restart nivyx
-sleep 3
+engine_ready || die "not ready after restart"
 c="$(fetch https://example.com/)"; ok "$c" || die "example.com with tlsrec -> '$c'"
 wait_status
 [ "$(field bypassed)" -ge 1 ] || die "bypassed=$(field bypassed)"
@@ -72,14 +159,58 @@ pass "stopped: table gone, HTTPS $c"
 
 stepn "crash = fail-open, then automatic restart"
 sudo systemctl start nivyx
-sleep 3
-sudo systemctl kill -s KILL nivyx
+engine_ready || die "not ready after start"
+# A crash as it really happens (SIGSEGV, OOM killer, kill -9): the signal
+# comes from outside systemd. (`systemctl kill` is not that: systemd 259 -
+# Ubuntu 26.04 - then skips ExecStopPost, and the table stays until the
+# restart 2 s later; checked separately below.)
+sudo kill -9 "$(systemctl show -p MainPID --value nivyx)"
 sleep 1
-c="$(fetch https://example.com/)"; ok "$c" || die "right after a crash -> '$c'"
+c="$(fetch https://example.com/)"
+if ! ok "$c"; then
+	# what is still in place one second after the crash (fail-open diagnosis)
+	echo "--- 1 s after SIGKILL ---"
+	systemctl show nivyx -p ActiveState,SubState,Result,ExecMainStatus,NRestarts --no-pager || true
+	sudo nft list table inet dpi_proxy_tp 2>&1 | head -40 || true
+	sudo nft list ruleset 2>/dev/null | grep -n 'table\|redirect' | head -20 || true
+	getent ahostsv4 example.com | head -3 || true
+	sudo conntrack -L -p tcp --dport 443 2>/dev/null | head -5 || true
+	curl -v -sS -o /dev/null --max-time 10 https://example.com/ 2>&1 | grep -E 'Trying|Connected|connect' | head -5 || true
+	echo "--- systemd ---"; systemctl --version | head -1
+	journalctl -u nivyx -o short-precise -n 15 --no-pager || true
+	sleep 4
+	echo "--- 5 s after SIGKILL ---"
+	systemctl show nivyx -p ActiveState,SubState,MainPID --no-pager || true
+	echo "fetch: $(fetch https://example.com/)"
+	# a real crash (signal from outside systemd) instead of systemctl kill
+	for _ in $(seq 1 20); do systemctl is-active --quiet nivyx && break; sleep 1; done
+	sleep 3
+	sudo kill -9 "$(systemctl show -p MainPID --value nivyx)" || true
+	sleep 1
+	echo "--- 1 s after kill -9 of the main process ---"
+	systemctl show nivyx -p ActiveState,SubState,Result --no-pager || true
+	sudo nft list table inet dpi_proxy_tp >/dev/null 2>&1 && echo "table: still present" || echo "table: removed"
+	echo "fetch: $(fetch https://example.com/)"
+	journalctl -u nivyx -o short-precise -n 8 --no-pager || true
+	die "right after a crash -> '$c'"
+fi
 for _ in $(seq 1 20); do systemctl is-active --quiet nivyx && break; sleep 1; done
 systemctl is-active --quiet nivyx || die "not restarted"
-sleep 3
+engine_ready || die "not ready after the automatic restart"
 c="$(fetch https://example.com/)"; ok "$c" || die "after restart -> '$c'"
+# systemctl kill: whatever systemd does with ExecStopPost, HTTPS must work
+# again by the time the automatic restart has happened (RestartSec=2)
+sudo systemctl kill -s KILL nivyx
+ok_after=""
+for i in 1 2 3 4 5 6 7 8; do
+	sleep 1
+	c="$(fetch https://example.com/)"
+	if ok "$c"; then ok_after=$i; break; fi
+done
+[ -n "$ok_after" ] || die "HTTPS still failing 8 s after systemctl kill -> '$c'"
+echo "after systemctl kill: HTTPS works again after ${ok_after}s"
+# the next steps need the engine back, not only working (fail-open) HTTPS
+engine_ready || die "not ready again after systemctl kill"
 pass "killed: fail-open, restarted, HTTPS $c"
 
 stepn "nivyx commands"
@@ -156,18 +287,23 @@ sudo cp -p /tmp/nivyx-conf.orig "$CONF"
 sudo systemctl reload nivyx
 # a corrupt config must never stop the service or the internet
 printf 'garbage line\n[nonsense]\nx = y\n' | sudo tee -a "$CONF" >/dev/null
-sudo systemctl restart nivyx; sleep 3
+sudo systemctl restart nivyx; engine_ready || die "not ready after restart"
 systemctl is-active --quiet nivyx || die "the service does not start with a corrupt config"
 c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS with a corrupt config -> '$c'"
 sudo cp -p /tmp/nivyx-conf.orig "$CONF"
-sudo systemctl restart nivyx; sleep 3
+sudo systemctl restart nivyx; engine_ready || die "not ready after restart"
 pass "stats/config/diagnose/help behave; manual config preserved; a corrupt config does not stop the service"
 
 stepn "repair: nothing wrong on a healthy install"
 out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out"
 echo "$out" | grep -q 'nothing else wrong' || die "repair on a healthy install reported something"
 
-stepn "repair: firewall table removed externally"
+stepn "repair: firewall table removed externally, right after a burst of restarts"
+# five starts within systemd's 10 s window (StartLimitBurst=5): repair's own
+# restart is the sixth and must not be refused (it clears the rate limit)
+sudo systemctl reset-failed nivyx 2>/dev/null || true
+for _ in 1 2 3 4 5; do sudo systemctl restart nivyx || die "restart refused before the burst limit"; done
+engine_ready || die "not ready after the restart burst"
 sudo nft delete table inet dpi_proxy_tp || die "could not delete the table"
 out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "nivyx repair failed"; }; echo "$out"
 echo "$out" | grep -q 'fixed' || die "repair fixed nothing"
@@ -190,7 +326,7 @@ stepn "repair: damaged learned-decision file"
 sudo systemctl stop nivyx
 printf '# header\nbroken line\nexample.org %s 4 tlsrec original 1790000000\n' "0123456789abcdef" | sudo tee /var/lib/nivyx/tp-decisions.conf >/dev/null
 # the engine itself must start with the damaged file (fail-safe, not fail-closed)
-sudo systemctl start nivyx; sleep 3
+sudo systemctl start nivyx; engine_ready || die "not ready after start"
 systemctl is-active --quiet nivyx || die "the engine does not start with a damaged decision file"
 c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS with a damaged decision file -> '$c'"
 sudo systemctl stop nivyx
@@ -242,6 +378,16 @@ trap - EXIT
 pass "service survived, DNS recovered when the resolvers returned (no permanent loss)"
 
 stepn "update: check, bad checksum, broken release (rollback), good release"
+if [ "$(uname -m)" != x86_64 ]; then
+	# there is no release package for this architecture: the updater must
+	# say so and change nothing (update = git pull + install.sh here)
+	out="$(sudo nivyx update 2>&1 || true)"; echo "$out"
+	if echo "$out" | grep -q 'Update available'; then
+		echo "$out" | grep -q "no release asset for this architecture" || die "update on $(uname -m) did not refuse clearly"
+	fi
+	systemctl is-active --quiet nivyx || die "service down after a refused update"
+	pass "$(uname -m): no release package; update refuses and leaves the install alone"
+else
 mock="$(mktemp -d)"; port=18765
 current="$(nivyx version | awk '{print $2}')"
 mk_release() {	# $1 = engine file, $2 = SHA256SUMS mode (good|bad), $3 = version tag
@@ -282,7 +428,7 @@ t=0
 until curl -fsS --max-time 3 "http://127.0.0.1:$port/latest.json" >/dev/null 2>&1 || [ $t -ge 15 ]; do sleep 1; t=$((t + 1)); done
 curl -fsS --max-time 3 "http://127.0.0.1:$port/latest.json" >/dev/null 2>&1 || { cat "$mock/httpd.log"; die "the local mock release server is not reachable"; }
 export NIVYX_RELEASE_API="http://127.0.0.1:$port/latest.json"
-upd() { sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update "$@"; }
+upd() { sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update; }
 
 out="$(nivyx update --check)"; echo "$out"
 echo "$out" | grep -q 'Update available' || die "update --check did not report the newer release"
@@ -319,6 +465,8 @@ kill "$httpd" 2>/dev/null || true
 unset NIVYX_RELEASE_API
 pass "check ok; bad checksum rejected; broken release rolled back; good release installed ($current -> 99.0.0), config kept"
 
+fi
+
 stepn "size and resource use"
 ls -l /usr/local/bin/nivyx-engine
 t0="$(date +%s.%N)"
@@ -345,10 +493,27 @@ curl -sS -o /dev/null --max-time 60 \
 	'https://speed.cloudflare.com/__down?bytes=50000000' || true
 pass "measured"
 
-stepn "uninstall cleans only our own state"
+stepn "plain uninstall keeps settings and learned state; reinstall picks them up"
+printf '\n[domains]\ne2e-keep.example = tlsrec\n' | sudo tee -a /etc/nivyx/strategy.conf >/dev/null
+conf1="$(sha /etc/nivyx/strategy.conf)"
+sudo "$ROOT/scripts/uninstall.sh" || die "uninstall.sh failed"
+systemctl list-unit-files | grep -q 'nivyx.service' && die "unit still present"
+sudo nft list table inet dpi_proxy_tp >/dev/null 2>&1 && die "table still present"
+[ -e /usr/local/bin/nivyx-engine ] && die "engine still present"
+[ "$(sha /etc/nivyx/strategy.conf)" = "$conf1" ] || die "plain uninstall changed or removed the config"
+[ -d /var/lib/nivyx ] || die "plain uninstall removed the learned state"
+c="$(fetch https://example.com/)"; ok "$c" || die "after plain uninstall -> '$c'"
+sudo "$ROOT/scripts/install.sh" || die "reinstall failed"
+[ "$(sha /etc/nivyx/strategy.conf)" = "$conf1" ] || die "reinstall changed the kept config"
+nivyx strategy e2e-keep.example | grep -q 'tlsrec (manual' || die "the kept manual rule does not apply after reinstall"
+pass "kept /etc/nivyx and /var/lib/nivyx; reinstall uses them"
+
+stepn "uninstall --purge cleans only our own state"
 sudo "$ROOT/scripts/uninstall.sh" --purge
 systemctl list-unit-files | grep -q 'nivyx.service' && die "unit still present"
 sudo nft list table inet dpi_proxy_tp >/dev/null 2>&1 && die "table still present"
+[ -e /etc/nivyx ] && die "--purge left /etc/nivyx"
+[ -e /var/lib/nivyx ] && die "--purge left /var/lib/nivyx"
 c="$(fetch https://example.com/)"; ok "$c" || die "after uninstall -> '$c'"
 pass "uninstalled; HTTPS $c"
 

@@ -21,6 +21,13 @@ INCLUDES = -Iinclude
 
 LDFLAGS = -lpthread
 
+# Sanitizer build of the engine itself (not only the unit tests), e.g.
+#   make clean all SAN_CFLAGS="-fsanitize=thread -g"
+# (used by scripts/sanitize-engine-linux.sh; empty for every real build)
+SAN_CFLAGS ?=
+CFLAGS += $(SAN_CFLAGS)
+LDFLAGS += $(SAN_CFLAGS)
+
 # e.g. `make test TEST_CFLAGS="-fsanitize=address,undefined -g"`
 TEST_CFLAGS ?=
 
@@ -80,6 +87,7 @@ TP_SRC = \
 	src/transparent/dnsfwd.c \
 	src/transparent/platform_linux.c \
 	src/tlsclient.c \
+	src/release_verify.c \
 	src/compat.c \
 	src/dns/dns.c \
 	src/dns/dns_udp.c \
@@ -261,6 +269,7 @@ WIN_TP_SRC = \
 	src/transparent/platform_windows.c \
 	src/transparent/svc_windows.c \
 	src/tlsclient.c \
+	src/release_verify.c \
 	src/compat.c \
 	src/dns/dns.c \
 	src/dns/dns_udp.c \
@@ -275,7 +284,7 @@ WIN_CFLAGS = $(CFLAGS) -DHAVE_TRANSPARENT -D_WIN32_WINNT=0x0A00 \
 LDFLAGS_WIN = $(if $(OPENSSL_WIN_PREFIX),-L$(OPENSSL_WIN_PREFIX)/lib) \
 	-Wl,-Bstatic -lssl -lcrypto -Wl,-Bdynamic \
 	$(WINDIVERT_DIR)/x64/WinDivert.lib \
-	-lws2_32 -liphlpapi -lcrypt32 -lbcrypt -ladvapi32 -luser32 \
+	-lws2_32 -liphlpapi -lcrypt32 -lbcrypt -ladvapi32 -luser32 -lgdi32 \
 	-static-libgcc -Wl,-Bstatic -lpthread -Wl,-Bdynamic
 WIN_OBJ = $(SRC:.c=.win.o) $(WIN_TP_SRC:.c=.win.o)
 
@@ -292,7 +301,8 @@ windows: $(WIN_OBJ)
 
 # Pure unit tests built for Windows (run them with wine, or on
 # Windows): the shared decision/DNS/TLS-parsing core.
-WIN_TESTS = test_dns test_transparent test_tls test_tls_record test_strategy
+WIN_TESTS = test_dns test_transparent test_tls test_tls_record test_strategy \
+	test_connect_retry
 WIN_TEST_OBJ = src/dns/dns.win.o src/dns/dns_udp.win.o src/compat.win.o \
 	src/transparent/policy.win.o src/transparent/pf_rules.win.o \
 	src/strategy/strategy.win.o \

@@ -78,8 +78,8 @@ to the journal: `journalctl -u nivyx`
 ```sh
 git pull && sudo ./scripts/install.sh   # rebuilds and restarts; config kept
 sudo nivyx update                       # verified binary update from the latest release
-sudo ./scripts/uninstall.sh             # removes service, binaries, nftables table
-sudo ./scripts/uninstall.sh --purge     # ...and /etc/nivyx
+sudo ./scripts/uninstall.sh             # removes service, binaries, nftables table; keeps settings and learned state
+sudo ./scripts/uninstall.sh --purge     # ...and /etc/nivyx, /var/lib/nivyx
 ```
 
 Installs from before v2.3 (service `dpi-proxy-transparent`, settings in
@@ -91,6 +91,49 @@ not come up healthy, the previous names are started again.
 Re-running the installer is safe: it keeps `/etc/nivyx/strategy.conf`
 and learned state, and does not reinstall packages that are present.
 Uninstalling does not remove the packages the installer added.
+
+The installer works in two phases. Checking dependencies and building
+change nothing on the system: a failed build (exit 3) or missing
+dependency (exit 2) leaves a running Nivyx exactly as it was. Only then
+does it back up what it will replace (engine, CLI, units, man page,
+completions, `/etc/nivyx`, `/var/lib/nivyx`) and the state of each
+Nivyx service. If the new service does not pass its health check
+(exit 4), the backup is put back and the services that were running are
+started again; an install from before v2.3 keeps its old service,
+binaries and folders until the new one is healthy. Where both
+`/etc/dpi-proxy` and `/etc/nivyx` exist, nothing is overwritten: a
+differing old file is kept as `<name>.legacy`. Only one install,
+update, repair or uninstall runs at a time.
+
+### Supported distributions
+
+The installer builds from source on systemd + nftables distributions
+(Debian 12+, Ubuntu 22.04+, Fedora, Arch, openSUSE Tumbleweed;
+dependencies are installed automatically only on the Debian family).
+CI builds and unit-tests the engine against OpenSSL 3 and against the
+OpenSSL 4 that Fedora and Arch now ship.
+
+`nivyx update` installs a prebuilt engine that needs glibc 2.35+ and
+**OpenSSL 3** (`libssl.so.3`): built on Ubuntu 22.04, run in CI on Debian
+12, Ubuntu 22.04/24.04 and openSUSE Tumbleweed. On distributions with
+OpenSSL 4 (Fedora 45+, Arch) it cannot run; `nivyx update` says so and
+changes nothing — update there with `git pull && sudo ./scripts/install.sh`.
+(v2.3.0's package needed glibc 2.38, so `nivyx update` also refused it
+on Debian 12 and Ubuntu 22.04.) openSUSE Leap and OpenSSL 1.1 systems are
+not tested.
+
+Fail-open after a crash: when the engine dies (crash, OOM killer,
+`kill -9`), systemd's `ExecStopPost` deletes the nftables table at once
+and HTTPS goes out directly until the automatic restart 2 s later. One
+exception seen on systemd 259 (Ubuntu 26.04): after an administrator's
+`systemctl kill`, systemd skips `ExecStopPost`, so HTTPS fails until the
+restart (about 2 s; at most 30 s if the restart itself fails, when the
+heartbeat-gated rule expires). Use `sudo nivyx stop` to stop it cleanly.
+
+x86_64 and **arm64**: arm64 is built, unit-tested and end-to-end tested
+in CI on a real arm64 machine, installed from source with
+`scripts/install.sh`. There is no arm64 release package, so on arm64
+update with `git pull && sudo ./scripts/install.sh`.
 
 ## Troubleshooting
 

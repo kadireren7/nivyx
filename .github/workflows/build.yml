@@ -4,6 +4,8 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  # the release workflow runs this whole matrix first (.github/workflows/release.yml)
+  workflow_call:
 
 # least privilege: CI only reads the repository
 permissions:
@@ -33,10 +35,90 @@ jobs:
         run: ./scripts/parity-test.sh
       - name: support-bundle redaction
         run: ./scripts/redaction-test.sh
-      - name: Linux update package
+      - name: TLS certificate and hostname verification (local endpoints)
+        run: ./scripts/tls-verify-test.sh
+      - name: release signature check (engine, temporary test keys)
+        run: ./scripts/release-verify-test.sh
+      - name: the updaters carry the keys of scripts/release-keys.txt
+        run: ./scripts/release-keys.sh check
+      # the release workflow's SBOM and manifest steps, on stand-in files
+      # (a broken generator otherwise shows only when a release runs)
+      - name: release tooling (SBOM, manifest) produces valid output
         run: |
-          ./scripts/package-linux.sh linux-pkg
-          tar -tzf linux-pkg/nivyx-linux-x86_64.tar.gz
+          d="$(mktemp -d)"
+          for f in nivyx-linux-x86_64.tar.gz nivyx-macos-arm64.zip nivyx-macos-x86_64.zip; do head -c 64 /dev/urandom >"$d/$f"; done
+          v="$(cat VERSION)"
+          ./scripts/gen-sbom.sh "$v" "$d" >"$d/nivyx-$v.spdx.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["spdxVersion"]=="SPDX-2.3" and d["creationInfo"]["created"] and len(d["files"])==3' "$d/nivyx-$v.spdx.json"
+          ./scripts/release-manifest.sh "$v" "$d" >"$d/nivyx-release.manifest"
+          ./scripts/release-sign.sh check "$d" "$v"
+
+  linux-package:
+    # The update package is built on the oldest supported baseline
+    # (Ubuntu 22.04: glibc 2.35, OpenSSL 3.0), so the engine in it also
+    # runs on Debian 12, Ubuntu 22.04 and every newer distribution;
+    # v2.3.0's package, built on the runner's Ubuntu 24.04, needed glibc 2.38
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: apt-get update && apt-get install -y --no-install-recommends build-essential libssl-dev pkg-config ca-certificates
+      - run: make re
+      - run: ./scripts/package-linux.sh linux-pkg
+      - run: ./scripts/check-linux-package.sh linux-pkg/nivyx-linux-x86_64.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nivyx-linux-x86_64
+          path: linux-pkg/nivyx-linux-x86_64.tar.gz
+
+  linux-package-distros:
+    # the exact package, unpacked and run on each distribution family with
+    # only its own OpenSSL 3 runtime installed (no compiler, no headers)
+    needs: linux-package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: 'debian:12', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
+          - { image: 'ubuntu:22.04', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
+          - { image: 'ubuntu:24.04', deps: 'apt-get update && apt-get install -y --no-install-recommends openssl' }
+          - { image: 'opensuse/tumbleweed', deps: 'zypper -n in libopenssl3 tar gzip' }
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - run: ${{ matrix.deps }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: nivyx-linux-x86_64
+      - name: the engine and the CLI run here
+        run: |
+          tar -xzf nivyx-linux-x86_64.tar.gz
+          cd nivyx-linux-x86_64
+          ./dpi-proxy --version
+          ./dpi-proxy --capabilities | grep -q '^transparent_mode: supported'
+          bash -n ./nivyx
+          ./nivyx help >/dev/null
+
+  linux-source-openssl4:
+    # Fedora and Arch ship OpenSSL 4 (libssl.so.4): the prebuilt update
+    # package (OpenSSL 3) cannot run there, so these install from source -
+    # check that the engine builds and its unit tests pass against it
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: 'fedora:latest', deps: 'dnf install -y gcc make openssl openssl-devel pkgconf-pkg-config' }
+          - { image: 'archlinux:latest', deps: 'pacman -Syu --noconfirm base-devel openssl' }
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - run: ${{ matrix.deps }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: openssl version
+      - run: make re && make test
+      - name: transparent mode is built in
+        run: |
+          ./dpi-proxy --capabilities | grep -q '^transparent_mode: supported'
 
   shellcheck:
     # the installer, uninstaller, CLI and release/install test scripts
@@ -49,7 +131,14 @@ jobs:
           shellcheck -S warning -e SC1007,SC2034
           scripts/install.sh scripts/uninstall.sh scripts/nivyx scripts/package-linux.sh
           scripts/install-deps-test.sh scripts/update-compat-test-linux.sh
-          scripts/upgrade-test-linux.sh scripts/gen-sbom.sh
+          scripts/upgrade-test-linux.sh scripts/gen-sbom.sh scripts/e2e-test-linux.sh
+          scripts/check-linux-package.sh scripts/sanitize-engine-linux.sh
+          scripts/tls-verify-test.sh scripts/build-openssl-tsan.sh
+          scripts/release-manifest.sh scripts/release-sign.sh scripts/release-keys.sh
+          scripts/release-verify-test.sh scripts/signed-release-cases.sh
+          scripts/update-signature-test-linux.sh
+      # the macOS scripts are POSIX sh (macOS /bin/sh)
+      - run: shellcheck -s sh -S warning -e SC1007,SC2034 scripts/macos/nivyx scripts/macos/update-test.sh scripts/macos/lock-race-test.sh scripts/macos/install.sh scripts/macos/uninstall.sh
 
   install-deps:
     # the installer's Debian/Ubuntu dependency auto-install, in clean containers
@@ -63,6 +152,20 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: make sanitize
+
+  engine-sanitizers:
+    # The transparent engine itself (not only the unit tests) under
+    # ASan+UBSan and TSan, intercepting real HTTPS and DNS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev nftables
+      # TSan-instrumented OpenSSL for the TSan run (pinned source, cached)
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/openssl-tsan
+          key: openssl-tsan-3.5.5-${{ runner.os }}-${{ runner.arch }}-v1
+      - run: ./scripts/sanitize-engine-linux.sh "$RUNNER_TEMP/openssl-tsan"
 
   packet-mode-compile:
     # Real compile+link against real system dev headers, unlike the
@@ -147,6 +250,34 @@ jobs:
         with:
           name: nivyx-macos-${{ matrix.arch }}
           path: nivyx-macos-${{ matrix.arch }}.zip
+      - name: release signature check (engine, temporary test keys)
+        run: OPENSSL="$(brew --prefix openssl@3)/bin/openssl" ./scripts/release-verify-test.sh ./dpi-proxy
+      # the admin lock under contention; positive control: the lock of
+      # 5d572af (stale-takeover race) must fail the same test
+      - name: admin lock race test (+ control)
+        run: |
+          sh scripts/macos/lock-race-test.sh scripts/macos/nivyx 40
+          curl -fsSL -o "$RUNNER_TEMP/old-nivyx" https://raw.githubusercontent.com/kadireren7/nivyx/5d572af/scripts/macos/nivyx
+          if CONTROL=1 sh scripts/macos/lock-race-test.sh "$RUNNER_TEMP/old-nivyx" 20; then
+            echo "the old lock passed: the test does not reproduce the race here"; exit 1
+          fi
+      # a 99.0.0 build of the same tree and the signed/tampered releases made
+      # from it, for the updater signature test (macos-update)
+      - name: signature test releases (99.0.0, temporary test keys)
+        run: |
+          export OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
+          rm -f src/main.o && make all VERSION=99.0.0 OPENSSL_PREFIX="$SSL" OPENSSL_STATIC=1
+          ./dpi-proxy --version | grep -qx 'dpi-proxy 99.0.0'
+          mkdir -p sig99 && ./scripts/macos/package.sh sig99/nivyx-macos-${{ matrix.arch }}
+          (cd sig99 && ditto -c -k --keepParent nivyx-macos-${{ matrix.arch }} nivyx-macos-${{ matrix.arch }}.zip)
+          "$OPENSSL" genpkey -algorithm ed25519 -out "$RUNNER_TEMP/key-a.pem"
+          "$OPENSSL" genpkey -algorithm ed25519 -out "$RUNNER_TEMP/key-b.pem"
+          ./scripts/signed-release-cases.sh sigcases sig99/nivyx-macos-${{ matrix.arch }}.zip 99.0.0 "$RUNNER_TEMP/key-a.pem" "$RUNNER_TEMP/key-b.pem"
+          rm -f "$RUNNER_TEMP"/key-*.pem
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-signature-cases-macos-${{ matrix.arch }}
+          path: sigcases
 
   macos-e2e:
     # The real thing on real macOS machines (root, PF, launchd): the
@@ -157,7 +288,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: macos-14, arch: arm64 }
           - { runner: macos-15, arch: arm64 }
           - { runner: macos-26, arch: arm64 }
           - { runner: macos-15-intel, arch: x86_64 }
@@ -195,16 +325,46 @@ jobs:
         with:
           msystem: MINGW64
           install: >-
-            mingw-w64-x86_64-gcc mingw-w64-x86_64-openssl make curl unzip
+            mingw-w64-x86_64-gcc make perl curl unzip zip openssl
       - name: WinDivert SDK (pinned SHA-256)
         run: ./scripts/windows/fetch-windivert.sh
-      - run: make windows CC_WIN=gcc OPENSSL_WIN_PREFIX=/mingw64
+      # OpenSSL from the pinned official source (scripts/windows/build-openssl.sh),
+      # not the MSYS2 package current on the build day; cached
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/openssl-win
+          key: openssl-win-${{ hashFiles('scripts/macos/build-openssl.sh', 'scripts/windows/build-openssl.sh') }}-v1
+      - name: OpenSSL (pinned, static)
+        run: ./scripts/windows/build-openssl.sh "$(cygpath -u "$RUNNER_TEMP")/openssl-win"
+      - run: make windows CC_WIN=gcc OPENSSL_WIN_PREFIX="$(cygpath -u "$RUNNER_TEMP")/openssl-win"
       - name: unit tests (shared core, native Windows)
         run: |
-          make windows-tests CC_WIN=gcc OPENSSL_WIN_PREFIX=/mingw64
+          make windows-tests CC_WIN=gcc OPENSSL_WIN_PREFIX="$(cygpath -u "$RUNNER_TEMP")/openssl-win"
           for t in tests/unit/test_*.exe; do ./$t; done
+      # positive control for test_connect_retry (finding W8): built against
+      # the connect code from before the fix, it must fail on Windows -
+      # otherwise the test would not reproduce what it guards against
+      - name: W8 control (the unfixed connect retry fails test_connect_retry)
+        run: |
+          # (the checkout is shallow and MSYS2 has no git: the file at that commit)
+          curl -fsSL -o tests/unit/net_unfixed.c \
+            https://raw.githubusercontent.com/kadireren7/nivyx/a360890/src/transparent/net.c
+          grep -q 'connect: socket error %d' tests/unit/net_unfixed.c
+          gcc -Wall -Wextra -DHAVE_TRANSPARENT -D_WIN32_WINNT=0x0A00 -D__USE_MINGW_ANSI_STDIO=1 \
+            -Iinclude -Isrc/transparent -I"$(cygpath -u "$RUNNER_TEMP")/openssl-win/include" \
+            -DNET_C='"net_unfixed.c"' tests/unit/test_connect_retry.c src/compat.win.o \
+            -lws2_32 -static -o w8-control.exe
+          rm -f tests/unit/net_unfixed.c
+          if ./w8-control.exe; then echo "the unfixed code passed: the test does not reproduce W8 here"; exit 1; fi
+          echo "unfixed code fails the test as expected (W8 reproduced); the fixed code passes it (unit tests above)"
       - name: package
         run: ./scripts/windows/package.sh dist
+      - name: the engine embeds the pinned OpenSSL, with absolute directories
+        run: |
+          v="$(sed -n 's/^VERSION=//p' scripts/macos/build-openssl.sh)"
+          strings dist/dpi-proxy.exe | grep -q "^OpenSSL $v " || { echo "dpi-proxy.exe is not built with OpenSSL $v"; exit 1; }
+          strings dist/dpi-proxy.exe | grep -E '^(OPENSSLDIR|MODULESDIR):'
+          ! strings dist/dpi-proxy.exe | grep -qE '^(OPENSSLDIR|MODULESDIR): "/'
       - name: SOCKS5 smoke test
         run: |
           ./dist/dpi-proxy.exe &
@@ -221,6 +381,43 @@ jobs:
         with:
           name: nivyx-windows-x86_64
           path: dist
+      - name: release signature check (engine, temporary test keys)
+        run: ./scripts/release-verify-test.sh ./dist/dpi-proxy.exe
+      # a 99.0.0 build of the same tree and the signed/tampered releases made
+      # from it (after the artifact above was uploaded)
+      - name: signature test releases (99.0.0, temporary test keys)
+        run: |
+          rm -f src/main.win.o
+          make windows VERSION=99.0.0 CC_WIN=gcc OPENSSL_WIN_PREFIX="$(cygpath -u "$RUNNER_TEMP")/openssl-win"
+          ./scripts/windows/package.sh sig99/nivyx-windows-x86_64
+          # (run from the package: WinDivert.dll must be next to the exe)
+          v="$(./sig99/nivyx-windows-x86_64/dpi-proxy.exe --version | tr -d '\r')"
+          [ "$v" = 'dpi-proxy 99.0.0' ] || { echo "99.0.0 build reports: $v"; exit 1; }
+          (cd sig99 && zip -qr nivyx-windows-x86_64.zip nivyx-windows-x86_64)
+          t="$(cygpath -u "$RUNNER_TEMP")"
+          openssl genpkey -algorithm ed25519 -out "$t/key-a.pem"
+          openssl genpkey -algorithm ed25519 -out "$t/key-b.pem"
+          ./scripts/signed-release-cases.sh sigcases sig99/nivyx-windows-x86_64.zip 99.0.0 "$t/key-a.pem" "$t/key-b.pem"
+          rm -f "$t"/key-*.pem
+      - name: updater release-signature enforcement (real WinDivert, Administrator)
+        shell: pwsh
+        run: ./scripts/windows/update-signature-test.ps1 -Package dist -Cases sigcases
+
+  linux-arm64:
+    # Linux on 64-bit ARM (Raspberry Pi 4/5, ARM servers): built, unit-
+    # tested and run through the full end-to-end cycle on a real arm64
+    # machine. Installed from source with scripts/install.sh; there is no
+    # arm64 release package, so `nivyx update` is not available there.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev nftables
+      - run: make re && make test
+      - name: transparent mode is built in
+        run: |
+          ./dpi-proxy --capabilities | grep -q '^transparent_mode: supported'
+      - run: ./scripts/tls-verify-test.sh
+      - run: ./scripts/e2e-test-linux.sh
 
   linux-upgrade:
     # v2.1.0 (the real tagged source, installed with its own installer)
@@ -235,6 +432,9 @@ jobs:
       - run: ./scripts/upgrade-test-linux.sh v2.1.0
       - run: ./scripts/upgrade-test-linux.sh v2.2.2
       - run: ./scripts/update-compat-test-linux.sh v2.2.2
+      - run: ./scripts/update-compat-test-linux.sh v2.3.0
+      - name: updater release-signature enforcement (temporary test keys)
+        run: ./scripts/update-signature-test-linux.sh
 
   macos-upgrade:
     # the real v2.1.0 release ZIP (checksum-verified) upgraded in place by
@@ -265,10 +465,57 @@ jobs:
       - name: upgrade v2.1.0 -> candidate (PF, launchd, root)
         run: ./scripts/macos/upgrade-test.sh "$RUNNER_TEMP/old/nivyx-macos-${{ matrix.arch }}" "$RUNNER_TEMP/new/nivyx-macos-${{ matrix.arch }}"
 
+  macos-update:
+    # `nivyx update` on real Macs: the v2.2.2 and v2.3.0 updaters exactly as
+    # released (macOS updater code identical in v2.2.0-v2.3.0) install the
+    # candidate; a release that cannot start is rolled back by both the old
+    # and the candidate updater; settings and learned state are kept; and
+    # (v2.3.0 runs) the candidate's release-signature check, every case
+    needs: macos
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, arch: arm64, tag: v2.2.2 }
+          - { runner: macos-15, arch: arm64, tag: v2.3.0, signature: true }
+          - { runner: macos-15-intel, arch: x86_64, tag: v2.2.2 }
+          - { runner: macos-15-intel, arch: x86_64, tag: v2.3.0, signature: true }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: nivyx-macos-${{ matrix.arch }}
+          path: candidate
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: matrix.signature
+        with:
+          name: test-signature-cases-macos-${{ matrix.arch }}
+          path: sigcases
+      - name: ${{ matrix.tag }} package (checksum-verified)
+        run: |
+          mkdir -p "$RUNNER_TEMP/old" && cd "$RUNNER_TEMP/old"
+          base=https://github.com/kadireren7/nivyx/releases/download/${{ matrix.tag }}
+          curl -fsSL -O "$base/nivyx-macos-${{ matrix.arch }}.zip" -O "$base/SHA256SUMS"
+          grep " nivyx-macos-${{ matrix.arch }}.zip\$" SHA256SUMS | shasum -a 256 -c -
+          ditto -x -k nivyx-macos-${{ matrix.arch }}.zip .
+      - name: the ${{ matrix.tag }} updater installs the candidate; rollbacks; signatures (PF, launchd, root)
+        run: ./scripts/macos/update-test.sh "$RUNNER_TEMP/old/nivyx-macos-${{ matrix.arch }}" candidate/nivyx-macos-${{ matrix.arch }}.zip ${{ matrix.signature && 'sigcases' || '' }}
+
   windows-upgrade:
-    # the real v2.1.0 release ZIP (checksum-verified) upgraded in place by
-    # the package built from this tree, with real WinDivert
+    # real released packages (checksum-verified) upgraded in place by the
+    # package built from this tree, and the old releases' own updaters
+    # installing it, with real WinDivert
     needs: windows
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { tag: v2.1.0, test: upgrade }
+          - { tag: v2.2.2, test: upgrade }
+          - { tag: v2.3.0, test: upgrade }
+          - { tag: v2.2.2, test: update-compat }
+          - { tag: v2.3.0, test: update-compat }
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -276,17 +523,22 @@ jobs:
         with:
           name: nivyx-windows-x86_64
           path: candidate
-      - name: v2.1.0 package
+      - name: ${{ matrix.tag }} package (checksum-verified)
         shell: pwsh
         run: |
-          $base = 'https://github.com/kadireren7/nivyx/releases/download/v2.1.0'
+          $base = "https://github.com/kadireren7/nivyx/releases/download/${{ matrix.tag }}"
           Invoke-WebRequest "$base/nivyx-windows-x86_64.zip" -OutFile old.zip
           Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
           $want = (Select-String -Path SHA256SUMS -Pattern 'nivyx-windows-x86_64.zip').Line.Split(' ')[0].ToLower()
           $got = (Get-FileHash old.zip -Algorithm SHA256).Hash.ToLower()
-          if ($want -ne $got) { throw "v2.1.0 zip checksum mismatch" }
+          if ($want -ne $got) { throw "${{ matrix.tag }} zip checksum mismatch" }
           Expand-Archive old.zip -DestinationPath old
           Get-ChildItem old
-      - name: upgrade v2.1.0 -> candidate (real WinDivert, Administrator)
+      - name: install the candidate over ${{ matrix.tag }} (real WinDivert, Administrator)
+        if: matrix.test == 'upgrade'
         shell: pwsh
-        run: ./scripts/windows/upgrade-test.ps1 -OldPackage old/nivyx-windows-x86_64 -NewPackage candidate
+        run: ./scripts/windows/upgrade-test.ps1 -OldPackage old/nivyx-windows-x86_64 -NewPackage candidate -OldTag ${{ matrix.tag }}
+      - name: the ${{ matrix.tag }} updater installs the candidate (real WinDivert, Administrator)
+        if: matrix.test == 'update-compat'
+        shell: pwsh
+        run: ./scripts/windows/update-compat-test.ps1 -OldPackage old/nivyx-windows-x86_64 -NewPackage candidate

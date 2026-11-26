@@ -3,7 +3,7 @@
 macOS transparent mode works the same way as on Linux: the built-in
 macOS packet filter (PF) sends this Mac's HTTPS and DNS to the local
 `dpi-proxy` service. It passes the full automated end-to-end test on
-real macOS GitHub runners (macOS 14, 15 and 26 on Apple silicon,
+real macOS GitHub runners (macOS 15 and 26 on Apple silicon,
 macOS 15 on Intel; real PF and launchd, root), and has been field-
 tested on a physical Mac against real ISP-level DPI in Turkey:
 DPI-blocked sites (Discord and others) opened normally with system-
@@ -60,11 +60,27 @@ Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/nivyx`,
 ## Uninstall
 
 Double-click **`Uninstall Nivyx.command`** in the extracted folder, or
-manually: `sudo ./uninstall.sh` (add `--purge` to also remove
-`/usr/local/etc/dpi-proxy`). Removes the service, the programs,
-settings, learned decisions, logs and dpi-proxy's PF rules, and
-releases its PF reference; PF, `/etc/pf.conf` and every other rule are
-left exactly as they were.
+manually: `sudo ./uninstall.sh`. Removes the service, the programs and
+Nivyx's PF rules, and releases its PF reference; PF, `/etc/pf.conf` and
+every other rule are left exactly as they were. Your settings
+(`/usr/local/etc/dpi-proxy`), learned decisions
+(`/usr/local/var/dpi-proxy`) and log are **kept**, so a reinstall picks
+them up; `sudo ./uninstall.sh --purge` removes them too.
+
+Both `.command` launchers and both scripts exit with the real result
+(0 = done). A reinstall or upgrade that fails its health check puts the
+previous installation (programs, plist, launchd job) back and starts it
+(exit 4); a fresh install that fails is removed again. If even that
+fails, the installer exits 5 and keeps its backup in
+`/private/var/tmp/nivyx-install-backup.*`.
+
+Gatekeeper: the binaries are not notarized (there is no Apple Developer
+ID certificate behind this project). macOS may ask you to confirm
+opening `Install Nivyx.command` (right click → Open). The installer
+then copies the two programs it installs without the download's
+quarantine flag; it no longer strips that flag from the whole extracted
+folder. Opening `dpi-proxy` itself from Finder only starts a plain
+SOCKS5 proxy and says so: use the `.command` launchers.
 
 ## How it touches the system
 

@@ -435,9 +435,13 @@ static void	run_plan(t_conn *c)
 			c->family == AF_INET6 ? 6 : 4, tpd_now());
 	pthread_mutex_unlock(&g_tpd.lock);
 	tpd_log("[fail] %s (%s): no attempt got a TLS answer (%zu tried, last: "
-		"%s); retrying direct-only for %ds", c->host, addr,
+		"%s%s%s); retrying direct-only for %ds", c->host, addr,
 		c->plan.ntried, c->plan.ntried
 		? tp_result_name(c->plan.results[c->plan.ntried - 1]) : "none",
+		c->plan.ntried && c->plan.results[c->plan.ntried - 1]
+		== TP_RES_CONNECT_FAIL ? " - " : "",
+		c->plan.ntried && c->plan.results[c->plan.ntried - 1]
+		== TP_RES_CONNECT_FAIL ? tpd_connect_error() : "",
 		TP_COOLDOWN_SECONDS);
 }
 
