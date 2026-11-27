@@ -78,6 +78,10 @@ release_admin_lock() {
 take_admin_lock
 trap release_admin_lock EXIT
 
+# macOS registers an anchor name as soon as pfctl addresses it (and keeps
+# it until reboot): only touch anchors that already exist
+anchor_exists() { pfctl -a com.apple -s Anchors 2>/dev/null | grep -qx "  $1"; }
+
 engine_pids() {
 	for e in $ENGINES; do pgrep -f "^$e" 2>/dev/null; done
 }
@@ -105,9 +109,11 @@ for pid in $(engine_pids); do kill -9 "$pid" 2>/dev/null || true; done
 log "Removing Nivyx's PF rules (its own anchor only)..."
 for n in $NAMES; do
 	anchor="com.apple/$n"
-	pfctl -a "$anchor" -F nat >/dev/null 2>&1 || true
-	pfctl -a "$anchor" -F rules >/dev/null 2>&1 || true
-	pfctl -a "$anchor" -F Tables >/dev/null 2>&1 || true
+	if anchor_exists "$anchor"; then
+		pfctl -a "$anchor" -F nat >/dev/null 2>&1 || true
+		pfctl -a "$anchor" -F rules >/dev/null 2>&1 || true
+		pfctl -a "$anchor" -F Tables >/dev/null 2>&1 || true
+	fi
 	# the PF enable reference of a daemon that could not release it itself
 	if [ -f "/var/run/$n/pf.token" ]; then
 		token="$(tr -cd '0-9' <"/var/run/$n/pf.token")"
@@ -149,8 +155,10 @@ left=""
 for n in $NAMES; do
 	[ -e "/Library/LaunchDaemons/io.github.kadireren7.$n.plist" ] && left="$left io.github.kadireren7.$n.plist"
 	launchctl print "system/io.github.kadireren7.$n" >/dev/null 2>&1 && left="$left launchd-job"
-	pfctl -a "com.apple/$n" -s nat 2>/dev/null | grep -q . && left="$left pf-anchor"
-	pfctl -a "com.apple/$n" -s rules 2>/dev/null | grep -q . && left="$left pf-anchor"
+	if anchor_exists "com.apple/$n"; then
+		pfctl -a "com.apple/$n" -s nat 2>/dev/null | grep -q . && left="$left pf-anchor"
+		pfctl -a "com.apple/$n" -s rules 2>/dev/null | grep -q . && left="$left pf-anchor"
+	fi
 	if [ "$PURGE" = 1 ]; then
 		[ -e "/usr/local/etc/$n" ] && left="$left /usr/local/etc/$n"
 		[ -e "/usr/local/var/$n" ] && left="$left /usr/local/var/$n"

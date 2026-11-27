@@ -68,7 +68,9 @@ Stop-Process -Id $httpd.Id -Force -ErrorAction SilentlyContinue
 Remove-Item $mock -Recurse -Force -ErrorAction SilentlyContinue
 
 if ($rc -eq 0) { Die "the old updater reported success installing $ver" }
-if ($out -notmatch 'nothing was installed') { Die 'the old updater did not say that nothing was installed' }
+# v2.2.x may already stop at its own unpacking bug under PowerShell 7
+# ("update failed: ..."); either way it must not have installed anything
+if ($out -notmatch 'nothing was installed|update failed') { Die 'the old updater did not report a refusal' }
 if ((Version-Of) -ne $old) { Die 'the installed version changed' }
 if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'the old service is not running any more' }
 $c = Fetch 'https://example.com/'
