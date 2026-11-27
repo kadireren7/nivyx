@@ -1,6 +1,6 @@
 # Automatic strategy discovery (packet mode)
 
-Packet mode only (Linux). Lets `dpi-proxy-packet` figure out which
+Packet mode only (Linux). Lets `nivyx-packet-engine` figure out which
 strategy actually works for a domain instead of you guessing at
 `strategy.conf` values by hand. See
 [docs/architecture.md](architecture.md) for the packet engine this
@@ -26,9 +26,9 @@ satisfied by construction: if `split` works, `fake`/`disorder`/
 ## Commands
 
 ```sh
-dpi-proxy-packet --show-strategy DOMAIN   # read-only, no privilege needed
-dpi-proxy-packet --probe DOMAIN           # auto-discover (skips if cache is fresh)
-dpi-proxy-packet --reprobe DOMAIN         # like --probe, but always re-runs
+nivyx-packet-engine --show-strategy DOMAIN   # read-only, no privilege needed
+nivyx-packet-engine --probe DOMAIN           # auto-discover (skips if cache is fresh)
+nivyx-packet-engine --reprobe DOMAIN         # like --probe, but always re-runs
 ```
 
 `--show-strategy` never touches the network or nftables — it only
@@ -57,7 +57,7 @@ precedence `--show-strategy` reports: manual `strategy.conf` rule →
 fresh same-network cache entry → `default`. The `[flow] classified`
 log line says which one applied (`source=manual|auto-discovery|
 default`). The engine loads the cache at startup and re-reads both
-files on `SIGHUP` (`systemctl reload dpi-proxy-packet`, or
+files on `SIGHUP` (`systemctl reload nivyx-packet`, or
 `nivyx reload`). `nivyx probe`/`reprobe` stop the
 service while probing (the probe's scoped engine uses the same
 nftables table and queue, and would otherwise delete the service's

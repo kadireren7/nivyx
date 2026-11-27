@@ -763,7 +763,7 @@ int	nfqueue_engine_run(int queue_num)
 	load_discovery_cache(ctx);
 	ctx->raw_v4_fd = -1;
 
-	log_msg(ctx, LOG_INFO, "[startup] dpi-proxy packet mode starting, "
+	log_msg(ctx, LOG_INFO, "[startup] nivyx packet mode starting, "
 		"queue=%d\n", queue_num);
 
 	if (nft_rules_apply(queue_num) != 0)

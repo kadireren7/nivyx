@@ -1,9 +1,11 @@
 #Requires -Version 5.1
 <#
   Upgrade regression test on a real Windows machine (CI: windows-latest,
-  Administrator): a real released package (v2.1.0, v2.2.2, v2.3.0, ...) is
-  installed, then the candidate package is installed over it, exactly as a
-  user would. Uninstalls at the end.
+  Administrator): a real released package (v2.1.0 ... v2.4.0, service
+  "dpi-proxy") is installed, then the candidate package is installed over
+  it with its Install launcher's installer, exactly as a user would: the
+  old installation must be moved to the "nivyx" names with its settings
+  and learned state. Uninstalls at the end.
 
     powershell -ExecutionPolicy Bypass -File upgrade-test.ps1 -OldPackage <dir> -NewPackage <dir> [-OldTag v2.1.0]
 
@@ -18,12 +20,17 @@ param(
 $Legacy = ($OldTag -eq 'v2.1.0')
 
 $ErrorActionPreference = 'Stop'
-$DataDir    = Join-Path $env:ProgramData 'dpi-proxy'
-$StatusFile = Join-Path $DataDir 'transparent.status'
-$LogFile    = Join-Path $DataDir 'dpi-proxy.log'
-$InstDir    = Join-Path $env:ProgramFiles 'dpi-proxy'
-$Conf       = Join-Path $DataDir 'strategy.conf'
-$Decisions  = Join-Path $DataDir 'tp-decisions.conf'
+$OldDataDir = Join-Path $env:ProgramData 'dpi-proxy'
+$OldInstDir = Join-Path $env:ProgramFiles 'dpi-proxy'
+# the old names until the upgrade, the new ones after it (Use-NewNames)
+function Use-Names([string]$svc, [string]$inst, [string]$data, [string]$log) {
+    $script:Service = $svc; $script:InstDir = $inst; $script:DataDir = $data
+    $script:StatusFile = Join-Path $data 'transparent.status'
+    $script:LogFile = Join-Path $data $log
+    $script:Conf = Join-Path $data 'strategy.conf'
+    $script:Decisions = Join-Path $data 'tp-decisions.conf'
+}
+Use-Names 'dpi-proxy' $OldInstDir $OldDataDir 'dpi-proxy.log'
 $script:step = 0
 
 function Step($m) { $script:step++; Write-Host "`n=== [$script:step] $m" }
@@ -43,7 +50,7 @@ function Fetch($url) { return "$(& curl.exe -sS -o NUL -w '%{http_code}' --max-t
 # (the status file carries that process's pid). Bounded: 30 s.
 function Wait-Ready {
     foreach ($i in 1..60) {
-        $w = Get-CimInstance Win32_Service -Filter "Name='dpi-proxy'" -ErrorAction SilentlyContinue
+        $w = Get-CimInstance Win32_Service -Filter "Name='$script:Service'" -ErrorAction SilentlyContinue
         if ($w -and $w.State -eq 'Running' -and $w.ProcessId -and (Test-Path $StatusFile) -and
             (Select-String -Path $StatusFile -Pattern "^pid: $($w.ProcessId)$" -Quiet) -and
             (Select-String -Path $StatusFile -Pattern '^engine: running' -Quiet)) { return $true }
@@ -66,7 +73,7 @@ function Https-Evidence([string]$url) {
     Write-Host "direct http://$h/ (not intercepted): $(& curl.exe -sS -o NUL -w '%{http_code}' --max-time 10 "http://$h/" 2>&1)"
     $own = @(Get-NetTCPConnection -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -ge 45000 -and $_.LocalPort -le 45999 })
     Write-Host "engine ports 45000-45999 in use: $($own.Count) ($(@($own | Where-Object State -eq 'TimeWait').Count) in TIME_WAIT)"
-    Write-Host "service: $((Get-Service dpi-proxy -ErrorAction SilentlyContinue).Status)"
+    Write-Host "service: $((Get-Service $script:Service -ErrorAction SilentlyContinue).Status)"
 }
 function Check-Https([string]$url, [string]$what) {
     $c = Fetch $url
@@ -78,7 +85,7 @@ function Version-Of { return ((& (Join-Path $InstDir 'nivyx.cmd') version 2>&1 |
 Step "install the real $OldTag package"
 & powershell -ExecutionPolicy Bypass -File (Join-Path $OldPackage 'install.ps1')
 if ($LASTEXITCODE -ne 0) { Die "$OldTag install.ps1 exited $LASTEXITCODE" }
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die "$OldTag service not running" }
+if ((Get-Service $Service).Status -ne 'Running') { Die "$OldTag service not running" }
 if ($Legacy) {
     foreach ($old in 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'dpictl-impl.ps1') {
         if (-not (Test-Path (Join-Path $InstDir $old))) { Die "the v2.1.0 layout lacks $old; wrong baseline?" }
@@ -91,7 +98,7 @@ Pass "$OldTag installed (version $oldVersion), HTTPS $c"
 
 Step 'user state that must survive'
 Add-Content $Conf "`n[domains]`nexample.com = tlsrec"
-Restart-Service dpi-proxy
+Restart-Service $Service
 if (-not (Wait-Ready)) { Die "$OldTag not ready after restart" }
 1..3 | ForEach-Object { Fetch 'https://example.com/' | Out-Null }
 Wait-Heartbeat
@@ -101,11 +108,16 @@ if (Test-Path $Decisions) { $decisionsBefore = @(Get-Content $Decisions | Where-
 Pass "rule written ($decisionsBefore decisions on record)"
 
 Step 'upgrade: install the candidate package over it'
-& powershell -ExecutionPolicy Bypass -File (Join-Path $NewPackage 'install.ps1')
+& powershell -ExecutionPolicy Bypass -File (Join-Path $NewPackage 'files\install.ps1')
 if ($LASTEXITCODE -ne 0) { Die "candidate install.ps1 exited $LASTEXITCODE over $OldTag" }
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service not running after the upgrade' }
+Use-Names 'nivyx' (Join-Path $env:ProgramFiles 'Nivyx') (Join-Path $env:ProgramData 'Nivyx') 'nivyx.log'
+if ((Get-Service $Service).Status -ne 'Running') { Die 'service not running after the upgrade' }
 
-Step 'after the upgrade'
+Step 'after the upgrade: the old names are gone'
+if (Get-Service 'dpi-proxy' -ErrorAction SilentlyContinue) { Die 'the old dpi-proxy service is still there' }
+if (Get-NetFirewallRule -Name 'dpi-proxy' -ErrorAction SilentlyContinue) { Die 'the old firewall rule is still there' }
+foreach ($d in $OldInstDir, $OldDataDir) { if (Test-Path $d) { Die "$d is still there" } }
+if (([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';') -contains $OldInstDir) { Die 'the old PATH entry is still there' }
 $newVersion = Version-Of
 if ($newVersion -eq $oldVersion) { Die "version did not change ($newVersion)" }
 foreach ($old in 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'dpictl-impl.ps1') {
@@ -120,7 +132,7 @@ if ((Get-FileHash $Conf).Hash -ne $confHash) { Die 'the manual config was modifi
 if ($decisionsBefore -gt 0 -and -not (Test-Path $Decisions)) { Die 'learned decisions were lost' }
 $out = (& (Join-Path $InstDir 'nivyx.cmd') strategy example.com 2>&1 | Out-String)
 if ($out -notmatch 'Manual rule') { Die "the manual rule no longer applies: $out" }
-Pass "version $oldVersion -> $newVersion; legacy wrappers gone; config and state intact"
+Pass "version $oldVersion -> $newVersion; moved to the nivyx names; config and state intact"
 
 Step 'DNS, HTTPS, bypass, restart, doctor, repair after the upgrade'
 if (-not (Wait-Ready)) { Die 'not ready after the upgrade' }
@@ -141,10 +153,10 @@ if ($out -notmatch 'nothing else wrong') { Die "repair found something wrong rig
 Pass 'DNS over DoH, HTTPS, bypass rule, restart, doctor and repair all fine'
 
 Step 'uninstall removes everything of ours'
-& powershell -ExecutionPolicy Bypass -File (Join-Path $NewPackage 'uninstall.ps1') -Purge
+& powershell -ExecutionPolicy Bypass -File (Join-Path $NewPackage 'files\uninstall.ps1') -Purge
 Start-Sleep -Seconds 3
-if (Get-Service dpi-proxy -ErrorAction SilentlyContinue) { Die 'service still present' }
-if (Get-NetFirewallRule -Name dpi-proxy -ErrorAction SilentlyContinue) { Die 'firewall rule still present' }
+if (Get-Service $Service -ErrorAction SilentlyContinue) { Die 'service still present' }
+if (Get-NetFirewallRule -Name $Service -ErrorAction SilentlyContinue) { Die 'firewall rule still present' }
 if (Test-Path $InstDir) { Die "$InstDir still present" }
 if (Test-Path $DataDir) { Die "$DataDir still present after -Purge" }
 $c = Fetch 'https://example.com/'

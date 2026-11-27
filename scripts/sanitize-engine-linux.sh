@@ -37,7 +37,7 @@ run_one() { # name sanitizer-flags runtime-options [make args...]
 	: >"$work/engine.log"
 	sudo env $opts DPI_PROXY_STRATEGY_CONF="$work/strategy.conf" \
 		DPI_PROXY_TP_STATUS="$work/status" DPI_PROXY_TP_DECISIONS="$work/decisions" \
-		"$ROOT/dpi-proxy" --mode transparent 2>&1 | tee -a "$work/engine.log" >/dev/null &
+		"$ROOT/nivyx-engine" --mode transparent 2>&1 | tee -a "$work/engine.log" >/dev/null &
 	pid=$!
 	for i in $(seq 1 60); do
 		sudo grep -q '^engine: running' "$work/status" 2>/dev/null && break
@@ -56,7 +56,7 @@ run_one() { # name sanitizer-flags runtime-options [make args...]
 		# shellcheck disable=SC2086
 		wait $load || true
 		# reload the manual rules mid-run
-		sudo kill -HUP "$(pgrep -f -n "^$ROOT/dpi-proxy --mode transparent")" 2>/dev/null || true
+		sudo kill -HUP "$(pgrep -f -n "^$ROOT/nivyx-engine --mode transparent")" 2>/dev/null || true
 		sleep 1
 	done
 	# concurrent DNS: 40 unique names at once (none cached: every one goes
@@ -82,7 +82,7 @@ run_one() { # name sanitizer-flags runtime-options [make args...]
 		die "$name: $((dnsf1 - dnsf0)) DNS failure(s) during the concurrent burst"
 	fi
 	c="$(fetch https://example.com/)"; ok "$c" || fails=$((fails + 1))
-	sudo kill -TERM "$(pgrep -f -n "^$ROOT/dpi-proxy --mode transparent")"
+	sudo kill -TERM "$(pgrep -f -n "^$ROOT/nivyx-engine --mode transparent")"
 	wait "$pid" || true
 	sudo nft list table inet dpi_proxy_tp >/dev/null 2>&1 && die "$name: the table is left after SIGTERM"
 	if grep -E -q 'ERROR: AddressSanitizer|runtime error:|WARNING: ThreadSanitizer|ERROR: LeakSanitizer' "$work/engine.log"; then

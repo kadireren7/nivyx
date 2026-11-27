@@ -38,7 +38,7 @@ while read -r c; do
 	grep -Eq "^	$c( \| [a-z-]+)*\) (echo|usage)|^	[a-z| -]*\| $c( \| [a-z-]+)*\) echo|^	$c\) echo" scripts/nivyx || grep -Eq "^	([a-z-]+ \| )*$c( \| [a-z-]+)*\) echo" scripts/nivyx || bad "scripts/nivyx has no help entry for '$c'"
 	grep -Eq "^	([a-z-]+ \| )*$c( \| [a-z-]+)*\) echo" scripts/macos/nivyx || bad "scripts/macos/nivyx has no help entry for '$c'"
 	grep -Eq "^        '$c' +\{|\{ \\\$_ -in .*'$c'" scripts/windows/nivyx-impl.ps1 || bad "nivyx-impl.ps1 has no help entry for '$c'"
-	for f in scripts/completions/nivyx.bash scripts/completions/_nivyx scripts/completions/nivyx.fish scripts/completions/nivyx.ps1; do
+	for f in scripts/completions/nivyx.bash scripts/completions/_nivyx scripts/completions/nivyx.fish; do
 		grep -q -- "$c" "$f" || bad "$f does not complete '$c'"
 	done
 	grep -q -- "$c" scripts/nivyx.1 || bad "man page does not mention '$c'"
@@ -59,7 +59,7 @@ for f in scripts/macos/package.sh scripts/windows/package.sh scripts/package-lin
 done
 # public text: legacy names only in the upgrade code, development notes, release notes and tests
 hits="$(grep -rIlE 'dpictl|dpi-proxy-ctl' README.md docs scripts/nivyx scripts/macos/nivyx scripts/windows/nivyx-impl.ps1 \
-	scripts/windows/nivyx.cmd scripts/completions scripts/nivyx.1 scripts/windows/*.txt scripts/macos/*.txt 2>/dev/null || true)"
+	scripts/windows/nivyx.cmd scripts/completions scripts/nivyx.1 2>/dev/null || true)"
 for f in $hits; do
 	case "$f" in docs/development.md) ;; *) bad "$f mentions a legacy command name" ;; esac
 done

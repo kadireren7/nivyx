@@ -16,7 +16,7 @@
 #include <unistd.h>
 
 /* ============================================================
- * `dpi-proxy --mode transparent`: the SOCKS proxy's stream core
+ * `nivyx-engine --mode transparent`: the SOCKS proxy's stream core
  * (relay.c) behind a listener that the platform layer (tp_platform.h:
  * nftables on Linux, WinDivert on Windows) redirects outgoing TCP/443
  * to. See tp.h for the decision model and docs/transparent-mode.md for
@@ -137,7 +137,7 @@ static const char	*env_or(const char *name, const char *fallback)
 
 #ifdef _WIN32
 
-/* %ProgramData%\dpi-proxy\<name> */
+/* %ProgramData%\nivyx\<name> */
 static const char	*data_path(const char *name)
 {
 	static char	paths[4][512];
@@ -149,19 +149,19 @@ static const char	*data_path(const char *name)
 	if (base == NULL || base[0] == '\0')
 		base = "C:\\ProgramData";
 	p = paths[next++ % 4];
-	snprintf(p, sizeof(paths[0]), "%s\\dpi-proxy\\%s", base, name);
+	snprintf(p, sizeof(paths[0]), "%s\\nivyx\\%s", base, name);
 	return (p);
 }
 # define DEFAULT_STRATEGY_CONF data_path("strategy.conf")
 # define DEFAULT_DECISIONS data_path("tp-decisions.conf")
 # define DEFAULT_STATUS data_path("transparent.status")
-# define DEFAULT_LOG_FILE data_path("dpi-proxy.log")
+# define DEFAULT_LOG_FILE data_path("nivyx.log")
 #elif defined(__APPLE__)
-# define DEFAULT_STRATEGY_CONF "/usr/local/etc/dpi-proxy/strategy.conf"
-# define DEFAULT_DECISIONS "/usr/local/var/dpi-proxy/tp-decisions.conf"
-# define DEFAULT_STATUS "/var/run/dpi-proxy/transparent.status"
+# define DEFAULT_STRATEGY_CONF "/usr/local/etc/nivyx/strategy.conf"
+# define DEFAULT_DECISIONS "/usr/local/var/nivyx/tp-decisions.conf"
+# define DEFAULT_STATUS "/var/run/nivyx/transparent.status"
 /* launchd has no journal: the daemon keeps (and rotates) its own */
-# define DEFAULT_LOG_FILE "/var/log/dpi-proxy.log"
+# define DEFAULT_LOG_FILE "/var/log/nivyx.log"
 #else
 # define DEFAULT_STRATEGY_CONF "/etc/dpi-proxy/strategy.conf"
 # define DEFAULT_DECISIONS "/var/lib/dpi-proxy/tp-decisions.conf"

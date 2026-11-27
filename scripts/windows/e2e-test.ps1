@@ -3,7 +3,7 @@
   End-to-end test of Windows transparent mode on a real machine
   (CI: GitHub's windows-latest runner, Administrator). Installs from
   a packaged folder, then checks the whole lifecycle. Exits non-zero
-  on the first failure. Never run it on a machine whose dpi-proxy
+  on the first failure. Never run it on a machine whose Nivyx
   installation you want to keep: it uninstalls at the end.
 
     powershell -ExecutionPolicy Bypass -File e2e-test.ps1 -Package <dir>
@@ -11,10 +11,10 @@
 param([Parameter(Mandatory = $true)][string]$Package)
 
 $ErrorActionPreference = 'Stop'
-$DataDir    = Join-Path $env:ProgramData 'dpi-proxy'
+$DataDir    = Join-Path $env:ProgramData 'Nivyx'
 $StatusFile = Join-Path $DataDir 'transparent.status'
-$LogFile    = Join-Path $DataDir 'dpi-proxy.log'
-$InstDir    = Join-Path $env:ProgramFiles 'dpi-proxy'
+$LogFile    = Join-Path $DataDir 'nivyx.log'
+$InstDir    = Join-Path $env:ProgramFiles 'Nivyx'
 $script:step = 0
 
 function Step($m) { $script:step++; Write-Host "`n=== [$script:step] $m" }
@@ -33,7 +33,7 @@ function Field($name) {
 # (the status file carries that process's pid). Bounded: 30 s.
 function Wait-Ready {
     foreach ($i in 1..60) {
-        $w = Get-CimInstance Win32_Service -Filter "Name='dpi-proxy'" -ErrorAction SilentlyContinue
+        $w = Get-CimInstance Win32_Service -Filter "Name='nivyx'" -ErrorAction SilentlyContinue
         if ($w -and $w.State -eq 'Running' -and $w.ProcessId -and (Test-Path $StatusFile) -and
             (Select-String -Path $StatusFile -Pattern "^pid: $($w.ProcessId)$" -Quiet) -and
             (Select-String -Path $StatusFile -Pattern '^engine: running' -Quiet)) { return $true }
@@ -62,7 +62,7 @@ function Log-Since([int]$n) {
 function Service-AppliesConfig([scriptblock]$plant, [scriptblock]$unplant) {
     $n = @(Get-Content $LogFile -ErrorAction SilentlyContinue).Count
     & $plant
-    Restart-Service dpi-proxy
+    Restart-Service nivyx
     $null = Wait-Ready
     foreach ($i in 1..40) { if ((Log-Since $n) -match 'transparent mode: TCP/443|DNS-over-HTTPS unavailable') { break }; Start-Sleep -Milliseconds 250 }
     $applied = [bool]((Log-Since $n) -match 'DNS-over-HTTPS unavailable')
@@ -75,7 +75,7 @@ function Test-LoadsOpenSslConfig {
     $cnf = Join-Path $dir 'etc\ssl\openssl.cnf'
     Set-Content -Encoding ASCII $cnf $HostileCnf
     $res = [ordered]@{}
-    $key = 'HKLM:\SYSTEM\CurrentControlSet\Services\dpi-proxy'
+    $key = 'HKLM:\SYSTEM\CurrentControlSet\Services\nivyx'
     $res.env = Service-AppliesConfig {
         New-ItemProperty -Path $key -Name Environment -PropertyType MultiString -Value @("OPENSSL_CONF=$cnf") -Force | Out-Null
     } { Remove-ItemProperty -Path $key -Name Environment }
@@ -95,9 +95,9 @@ function Test-LoadsOpenSslConfig {
         } { Remove-Item (Join-Path $d 'openssl.cnf') -Force; if ($made) { Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue } }
     }
     # by hand, below the working directory
-    Stop-Service dpi-proxy
+    Stop-Service nivyx
     $n = @(Get-Content $LogFile -ErrorAction SilentlyContinue).Count
-    $p = Start-Process -FilePath (Join-Path $InstDir 'dpi-proxy.exe') -ArgumentList '--mode', 'transparent' `
+    $p = Start-Process -FilePath (Join-Path $InstDir 'nivyx-engine.exe') -ArgumentList '--mode', 'transparent' `
         -WorkingDirectory $dir -PassThru -WindowStyle Hidden
     foreach ($i in 1..60) {
         Start-Sleep -Milliseconds 250
@@ -106,7 +106,7 @@ function Test-LoadsOpenSslConfig {
     $res.cwd = [bool]((Log-Since $n) -match 'DNS-over-HTTPS unavailable')
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue   # fail-open: interception ends with it
     Start-Sleep -Milliseconds 500
-    Start-Service dpi-proxy
+    Start-Service nivyx
     $null = Wait-Ready
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host ('OpenSSL config applied: ' + (($res.Keys | ForEach-Object { "$_=$($res[$_])" }) -join ', '))
@@ -130,25 +130,31 @@ function Invoke-Launcher([string]$cmdPath) {
     return $p.ExitCode
 }
 function Assert-NotInstalled([string]$what) {
-    if (Get-Service dpi-proxy -ErrorAction SilentlyContinue) { Die "$what left the dpi-proxy service behind" }
+    if (Get-Service nivyx -ErrorAction SilentlyContinue) { Die "$what left the nivyx service behind" }
     $c = Fetch 'https://example.com/'
     if ($c -notmatch '^[23]\d\d$') { Die "$what broke normal HTTPS -> '$c'" }
 }
 
 Step 'engine run directly: --service outside the service manager explains itself'
-$out = (& (Join-Path $Package 'dpi-proxy.exe') --service 2>&1 | Out-String)
+$out = (& (Join-Path $Package 'files\nivyx-engine.exe') --service 2>&1 | Out-String)
 $rc = $LASTEXITCODE
-if ($rc -ne 1063 -or $out -notmatch 'Install Nivyx\.cmd') { Die "dpi-proxy.exe --service from a terminal: exit $rc, output: $out" }
-$out = (& (Join-Path $Package 'dpi-proxy.exe') --version 2>&1 | Out-String)
-if ($out -notmatch '^dpi-proxy \d') { Die "--version output changed (the updater of v2.2/v2.3 parses it): $out" }
+if ($rc -ne 1063 -or $out -notmatch 'Install Nivyx\.cmd') { Die "nivyx-engine.exe --service from a terminal: exit $rc, output: $out" }
+$out = (& (Join-Path $Package 'files\nivyx-engine.exe') --version 2>&1 | Out-String)
+if ($out -notmatch '^nivyx-engine \d') { Die "--version output changed (nivyx update parses it): $out" }
 Pass "--service from a terminal: exit $rc with instructions; --version unchanged"
+
+Step 'package layout: only the launchers, the quick start and files\ at the top'
+$top = @(Get-ChildItem $Package | ForEach-Object { $_.Name } | Sort-Object)
+$want = @('files', 'Install Nivyx.cmd', 'nivyx.cmd', 'QUICKSTART.txt', 'Uninstall Nivyx.cmd', 'Update Nivyx.cmd' | Sort-Object)
+if (($top -join '|') -ne ($want -join '|')) { Die "unexpected top-level package contents: $($top -join ', ')" }
+Pass "top level: $($top -join ', ')"
 
 Step 'launcher: run from inside the ZIP (nothing next to it)'
 $lone = Join-Path $env:TEMP "nivyx-e2e-lone-$PID"
 New-Item -ItemType Directory -Force -Path $lone | Out-Null
 Copy-Item (Join-Path $Package 'Install Nivyx.cmd') $lone
 $rc = Invoke-Launcher (Join-Path $lone 'Install Nivyx.cmd')
-if ($rc -ne 3) { Die "Install Nivyx.cmd without install.ps1 exited $rc (expected 3)" }
+if ($rc -ne 3) { Die "Install Nivyx.cmd without its files folder exited $rc (expected 3)" }
 Assert-NotInstalled 'a launcher without its package'
 Remove-Item $lone -Recurse -Force
 Pass 'exit 3, nothing installed'
@@ -167,7 +173,7 @@ function Run-Elevation([string]$code) {
 }
 $exit7 = Join-Path $env:TEMP "nivyx-exit7-$PID.cmd"
 Set-Content -Encoding ASCII $exit7 '@exit /b 7'
-foreach ($launcher in 'Install Nivyx.cmd', 'Uninstall Nivyx.cmd') {
+foreach ($launcher in 'Install Nivyx.cmd', 'Uninstall Nivyx.cmd', 'Update Nivyx.cmd') {
     $line = @(Get-Content (Join-Path $Package $launcher) | Where-Object { $_ -match 'Start-Process -FilePath \$env:NIVYX_SELF' })
     if ($line.Count -ne 1) { Die "${launcher}: elevation command not found" }
     $line = $line[0].Trim()
@@ -189,14 +195,14 @@ Pass 'a failed elevation exits 6 with the reason, not 1223; the elevated exit co
 Step 'launcher: damaged package (driver file missing)'
 $bad = Join-Path $env:TEMP "nivyx-e2e-bad-$PID"
 Copy-Item $Package $bad -Recurse
-Remove-Item (Join-Path $bad 'WinDivert64.sys')
+Remove-Item (Join-Path $bad 'files\WinDivert64.sys')
 $rc = Invoke-Launcher (Join-Path $bad 'Install Nivyx.cmd')
 if ($rc -ne 2) { Die "Install Nivyx.cmd with WinDivert64.sys missing exited $rc (expected 2)" }
 Assert-NotInstalled 'a package with a missing file'
 Pass 'exit 2 passed through the launcher, nothing installed, HTTPS fine'
 
 Step 'launcher: service that cannot start (corrupt driver file)'
-Set-Content -Encoding ASCII (Join-Path $bad 'WinDivert64.sys') 'not a driver'
+Set-Content -Encoding ASCII (Join-Path $bad 'files\WinDivert64.sys') 'not a driver'
 $rc = Invoke-Launcher (Join-Path $bad 'Install Nivyx.cmd')
 if ($rc -ne 4) { Die "Install Nivyx.cmd with a corrupt driver exited $rc (expected 4)" }
 Assert-NotInstalled 'a failed service start'
@@ -210,13 +216,13 @@ Pass 'exit 4, service removed (fail-open), HTTPS fine, reason logged'
 Step 'install (double-click launcher, elevated)'
 $rc = Invoke-Launcher (Join-Path $Package 'Install Nivyx.cmd')
 if ($rc -ne 0) { Die "Install Nivyx.cmd exited $rc" }
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service not running after Install Nivyx.cmd' }
+if ((Get-Service nivyx).Status -ne 'Running') { Die 'service not running after Install Nivyx.cmd' }
 Pass 'Install Nivyx.cmd exit 0'
 
 Step 'install (install.ps1 directly, over the existing install)'
-& powershell -ExecutionPolicy Bypass -File (Join-Path $Package 'install.ps1')
+& powershell -ExecutionPolicy Bypass -File (Join-Path $Package 'files\install.ps1')
 if ($LASTEXITCODE -ne 0) { Die "install.ps1 exited $LASTEXITCODE" }
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service not running' }
+if ((Get-Service nivyx).Status -ne 'Running') { Die 'service not running' }
 Pass 'installed; service running; installer health check (DNS + HTTPS through it) passed'
 
 Step 'one install/update/repair/uninstall at a time (U4)'
@@ -236,19 +242,19 @@ foreach ($i in 1..40) {
     Start-Sleep -Milliseconds 250
 }
 if (-not $held) { Die 'the test holder never took the lock' }
-$svcPid = (Get-CimInstance Win32_Service -Filter "Name='dpi-proxy'").ProcessId
+$svcPid = (Get-CimInstance Win32_Service -Filter "Name='nivyx'").ProcessId
 $nvc = Join-Path $InstDir 'nivyx.cmd'
 foreach ($what in 'repair', 'uninstall', 'install') {
     switch ($what) {
         'repair' { $o = (& $nvc repair 2>&1 | Out-String) }
-        'uninstall' { $o = (& powershell -ExecutionPolicy Bypass -File (Join-Path $Package 'uninstall.ps1') 2>&1 | Out-String) }
-        'install' { $o = (& powershell -ExecutionPolicy Bypass -File (Join-Path $Package 'install.ps1') 2>&1 | Out-String) }
+        'uninstall' { $o = (& powershell -ExecutionPolicy Bypass -File (Join-Path $Package 'files\uninstall.ps1') 2>&1 | Out-String) }
+        'install' { $o = (& powershell -ExecutionPolicy Bypass -File (Join-Path $Package 'files\install.ps1') 2>&1 | Out-String) }
     }
     $rc = $LASTEXITCODE
     if ($rc -eq 0) { Write-Host $o; Die "$what ran while another operation held the lock" }
     if ($o -notmatch 'another Nivyx install, update, repair or uninstall is running') { Write-Host $o; Die "${what}: no lock message" }
 }
-if ((Get-CimInstance Win32_Service -Filter "Name='dpi-proxy'").ProcessId -ne $svcPid -or -not (Test-Path (Join-Path $InstDir 'dpi-proxy.exe'))) {
+if ((Get-CimInstance Win32_Service -Filter "Name='nivyx'").ProcessId -ne $svcPid -or -not (Test-Path (Join-Path $InstDir 'nivyx-engine.exe'))) {
     Die 'a refused operation touched the install'
 }
 Stop-Process -Id $holder.Id -Force
@@ -259,16 +265,16 @@ Pass 'repair, uninstall and install refused while locked (service untouched); pr
 
 Step 'a reinstall that fails puts the previous version back'
 $sysHash = (Get-FileHash (Join-Path $InstDir 'WinDivert64.sys')).Hash
-$exeHash = (Get-FileHash (Join-Path $InstDir 'dpi-proxy.exe')).Hash
+$exeHash = (Get-FileHash (Join-Path $InstDir 'nivyx-engine.exe')).Hash
 $bad = Join-Path $env:TEMP "nivyx-e2e-bad2-$PID"
 Copy-Item $Package $bad -Recurse
-Set-Content -Encoding ASCII (Join-Path $bad 'WinDivert64.sys') 'not a driver'
+Set-Content -Encoding ASCII (Join-Path $bad 'files\WinDivert64.sys') 'not a driver'
 $rc = Invoke-Launcher (Join-Path $bad 'Install Nivyx.cmd')
 Remove-Item $bad -Recurse -Force
 if ($rc -ne 4) { Die "a reinstall with a corrupt driver exited $rc (expected 4)" }
-if ((Get-Service dpi-proxy -ErrorAction SilentlyContinue).Status -ne 'Running') { Die 'the previous version is not running again' }
+if ((Get-Service nivyx -ErrorAction SilentlyContinue).Status -ne 'Running') { Die 'the previous version is not running again' }
 if ((Get-FileHash (Join-Path $InstDir 'WinDivert64.sys')).Hash -ne $sysHash) { Die 'the previous driver file was not restored' }
-if ((Get-FileHash (Join-Path $InstDir 'dpi-proxy.exe')).Hash -ne $exeHash) { Die 'the previous engine was not restored' }
+if ((Get-FileHash (Join-Path $InstDir 'nivyx-engine.exe')).Hash -ne $exeHash) { Die 'the previous engine was not restored' }
 if (Get-ChildItem $env:ProgramData -Directory -Filter 'nivyx-install-backup-*' -ErrorAction SilentlyContinue) { Die 'a successful restore left its backup behind' }
 foreach ($i in 1..40) { if (Select-String -Path $StatusFile -Pattern '^engine: running' -Quiet -ErrorAction SilentlyContinue) { break }; Start-Sleep -Milliseconds 500 }
 $c = Fetch 'https://example.com/'
@@ -305,7 +311,7 @@ Pass "5 requests -> $delta flows"
 
 Step 'bypass path: forced tlsrec rule for example.com'
 Add-Content -Encoding ASCII (Join-Path $DataDir 'strategy.conf') "`n[domains]`nexample.com = tlsrec"
-Restart-Service dpi-proxy
+Restart-Service nivyx
 if (-not (Wait-Ready)) { Die 'not ready after restart' }
 $c = Fetch 'https://example.com/'
 if ($c -notmatch '^[23]\d\d$') { Die "example.com with tlsrec -> '$c'" }
@@ -314,28 +320,28 @@ if ([int](Field bypassed) -lt 1) { Die "bypassed=$(Field bypassed); the TLSREC p
 Pass "example.com via tlsrec: HTTP $c; bypassed=$(Field bypassed)"
 
 Step 'restart keeps working'
-Restart-Service dpi-proxy
+Restart-Service nivyx
 if (-not (Wait-Ready)) { Die 'not ready after restart' }
 $c = Fetch 'https://www.wikipedia.org/'
 if ($c -notmatch '^[23]\d\d$') { Die "after restart -> '$c'" }
 Pass "after restart: HTTP $c"
 
 Step 'stop = ordinary networking'
-Stop-Service dpi-proxy
+Stop-Service nivyx
 $c = Fetch 'https://example.com/'
 if ($c -notmatch '^[23]\d\d$') { Die "with service stopped -> '$c'" }
 Resolve-DnsName example.com -Type A -ErrorAction Stop | Out-Null
 Pass "stopped: HTTPS $c, DNS OK"
 
 Step 'crash = fail-open, then automatic restart'
-Start-Service dpi-proxy
+Start-Service nivyx
 if (-not (Wait-Ready)) { Die 'not ready after start' }
-Stop-Process -Name dpi-proxy -Force
+Stop-Process -Name nivyx-engine -Force
 Start-Sleep -Milliseconds 500
 $c = Fetch 'https://example.com/'
 if ($c -notmatch '^[23]\d\d$') { Die "right after a crash -> '$c' (not fail-open)" }
 $back = $false
-foreach ($i in 1..30) { Start-Sleep -Seconds 1; if ((Get-Service dpi-proxy).Status -eq 'Running') { $back = $true; break } }
+foreach ($i in 1..30) { Start-Sleep -Seconds 1; if ((Get-Service nivyx).Status -eq 'Running') { $back = $true; break } }
 if (-not $back) { Die 'service was not restarted after the crash' }
 if (-not (Wait-Ready)) { Die 'not ready after the automatic restart' }
 $c2 = Fetch 'https://example.com/'
@@ -375,7 +381,7 @@ Pass 'nivyx status/diagnose/logs/version report correctly'
 Step 'OpenSSL configuration files are never loaded (OPENSSL_CONF, default locations, working directory)'
 $r = Test-LoadsOpenSslConfig
 if (Any-Applied $r) { Die 'the engine applied an OpenSSL configuration (it must never read one on Windows)' }
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service not running after the config test' }
+if ((Get-Service nivyx).Status -ne 'Running') { Die 'service not running after the config test' }
 $c = Fetch 'https://example.com/'
 if ($c -notmatch '^[23]\d\d$') { Die "after the config test -> '$c'" }
 Pass 'no OpenSSL configuration is read (OPENSSL_CONF, default locations, working directory); service restored'
@@ -460,15 +466,15 @@ Pass 'stats/config/help behave; manual config preserved'
 Step 'repair: nothing wrong, then stopped service + stale status, then missing firewall rule'
 $out = (& $nv repair 2>&1 | Out-String); Write-Host $out
 if ($LASTEXITCODE -ne 0 -or $out -notmatch 'nothing else wrong') { Die 'repair on a healthy install reported something' }
-Stop-Service dpi-proxy -Force
+Stop-Service nivyx -Force
 Set-Content $StatusFile 'engine: running'
-Get-NetFirewallRule -Name dpi-proxy -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-Set-Service dpi-proxy -StartupType Manual
+Get-NetFirewallRule -Name nivyx -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+Set-Service nivyx -StartupType Manual
 $out = (& $nv repair 2>&1 | Out-String); Write-Host $out
 if ($out -notmatch 'fixed') { Die 'repair fixed nothing' }
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'repair did not start the service' }
-if (-not (Get-NetFirewallRule -Name dpi-proxy -ErrorAction SilentlyContinue)) { Die 'repair did not recreate the firewall rule' }
-if ((Get-CimInstance Win32_Service -Filter "Name='dpi-proxy'").StartMode -ne 'Auto') { Die 'repair did not restore automatic start' }
+if ((Get-Service nivyx).Status -ne 'Running') { Die 'repair did not start the service' }
+if (-not (Get-NetFirewallRule -Name nivyx -ErrorAction SilentlyContinue)) { Die 'repair did not recreate the firewall rule' }
+if ((Get-CimInstance Win32_Service -Filter "Name='nivyx'").StartMode -ne 'Auto') { Die 'repair did not restore automatic start' }
 $c = Fetch 'https://example.com/'
 if ($c -notmatch '^[23]\d\d$') { Die "after repair -> '$c'" }
 Pass "service, firewall rule and startup type restored; HTTPS $c"
@@ -479,8 +485,8 @@ New-Item -ItemType Directory -Force -Path $mock | Out-Null
 $port = 18765
 $current = ((& $nv version 2>&1 | Out-String).Trim() -replace '^Nivyx\s+', '')
 # an engine that claims to be 9.9.9: the real one with the version string patched
-$bytes = [IO.File]::ReadAllBytes((Join-Path $InstDir 'dpi-proxy.exe'))
-$curVer = ((& (Join-Path $InstDir 'dpi-proxy.exe') --version 2>&1 | Out-String).Trim() -replace '^dpi-proxy\s+', '')
+$bytes = [IO.File]::ReadAllBytes((Join-Path $InstDir 'nivyx-engine.exe'))
+$curVer = ((& (Join-Path $InstDir 'nivyx-engine.exe') --version 2>&1 | Out-String).Trim() -replace '^nivyx-engine\s+', '')
 $from = [Text.Encoding]::ASCII.GetBytes($curVer); $to = [Text.Encoding]::ASCII.GetBytes('9.9.9')
 $patched = 0
 for ($i = 0; $i -le $bytes.Length - $from.Length; $i++) {
@@ -491,7 +497,7 @@ for ($i = 0; $i -le $bytes.Length - $from.Length; $i++) {
         $patched++
     }
 }
-if ($patched -eq 0) { Die 'no version string found to patch in dpi-proxy.exe' }
+if ($patched -eq 0) { Die 'no version string found to patch in nivyx-engine.exe' }
 $goodExe = Join-Path $mock 'engine-good.exe'
 [IO.File]::WriteAllBytes($goodExe, $bytes)
 if (((& $goodExe --version 2>&1 | Out-String)) -notmatch '9\.9\.9') { Die "could not build the 9.9.9 test engine: $(& $goodExe --version)" }
@@ -501,8 +507,8 @@ function New-MockRelease([string]$mode) {
     $pk = Join-Path $mock 'nivyx-windows-x86_64'
     Remove-Item $pk, (Join-Path $mock 'nivyx-windows-x86_64.zip'), (Join-Path $mock 'SHA256SUMS') -Recurse -Force -ErrorAction SilentlyContinue
     Copy-Item $Package $pk -Recurse
-    Copy-Item $goodExe (Join-Path $pk 'dpi-proxy.exe') -Force
-    if ($mode -eq 'brokendriver') { Set-Content -Encoding ASCII (Join-Path $pk 'WinDivert64.sys') 'not a driver' }
+    Copy-Item $goodExe (Join-Path $pk 'files\nivyx-engine.exe') -Force
+    if ($mode -eq 'brokendriver') { Set-Content -Encoding ASCII (Join-Path $pk 'files\WinDivert64.sys') 'not a driver' }
     $zip = Join-Path $mock 'nivyx-windows-x86_64.zip'
     Compress-Archive -Path $pk -DestinationPath $zip -Force
     $hash = if ($mode -eq 'badsum') { '0' * 64 } else { (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower() }
@@ -530,14 +536,14 @@ $out = (& $nv update 2>&1 | Out-String); Write-Host $out
 if ($LASTEXITCODE -eq 0) { Die 'update accepted a wrong checksum' }
 if ($out -notmatch 'SHA-256 mismatch') { Die 'no checksum diagnostic' }
 if (((& $nv version 2>&1 | Out-String).Trim() -replace '^Nivyx\s+', '') -ne $current) { Die 'bad checksum still changed the install' }
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service down after a rejected update' }
+if ((Get-Service nivyx).Status -ne 'Running') { Die 'service down after a rejected update' }
 
 New-MockRelease 'brokendriver'
 $out = (& $nv update 2>&1 | Out-String); Write-Host $out
 if ($LASTEXITCODE -eq 0) { Die 'update kept a release whose service cannot run' }
-if ($out -notmatch 'rolled back') { Die "no rollback message: $out" }
+if ($out -notmatch 'previous version is back and running') { Die "no rollback message: $out" }
 if (((& $nv version 2>&1 | Out-String).Trim() -replace '^Nivyx\s+', '') -ne $current) { Die 'broken release was not rolled back' }
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service down after rollback' }
+if ((Get-Service nivyx).Status -ne 'Running') { Die 'service down after rollback' }
 $c = Fetch 'https://example.com/'
 if ($c -notmatch '^[23]\d\d$') { Die "after rollback -> '$c'" }
 
@@ -549,7 +555,7 @@ Start-Sleep -Seconds 5   # nivyx.cmd is swapped in after the updater exits
 $ver = ((& $nv version 2>&1 | Out-String).Trim() -replace '^Nivyx\s+', '')
 if ($ver -ne '9.9.9') { Die "version after update: $ver" }
 if ((Get-FileHash $conf).Hash -ne $cfgBefore) { Die 'update changed the config' }
-if ((Get-Service dpi-proxy).Status -ne 'Running') { Die 'service down after update' }
+if ((Get-Service nivyx).Status -ne 'Running') { Die 'service down after update' }
 $c = Fetch 'https://example.com/'
 if ($c -notmatch '^[23]\d\d$') { Die "after update -> '$c'" }
 Remove-Item Env:\NIVYX_RELEASE_API
@@ -558,10 +564,10 @@ Remove-Item $mock -Recurse -Force -ErrorAction SilentlyContinue
 Pass "check ok; bad checksum rejected; broken release rolled back; good release installed ($current -> 9.9.9), config kept"
 
 Step 'size and resource use'
-$exe = Join-Path $InstDir 'dpi-proxy.exe'
+$exe = Join-Path $InstDir 'nivyx-engine.exe'
 Get-Item $exe | Select-Object Name, Length | Format-Table | Out-String | Write-Host
 $t0 = Get-Date
-Restart-Service dpi-proxy
+Restart-Service nivyx
 $ok = $false
 foreach ($i in 1..40) {
     Start-Sleep -Milliseconds 250
@@ -570,7 +576,7 @@ foreach ($i in 1..40) {
 $t1 = Get-Date
 if (-not $ok) { Die 'did not report running after restart (resource-use step)' }
 Write-Host ("startup time: {0:N2}s (restart issued -> engine: running)" -f ($t1 - $t0).TotalSeconds)
-$proc = Get-Process -Name dpi-proxy
+$proc = Get-Process -Name nivyx-engine
 Write-Host ("daemon: {0} thread(s), working set {1:N1} MB, CPU time {2}" -f $proc.Threads.Count, ($proc.WorkingSet64 / 1MB), $proc.TotalProcessorTime)
 foreach ($u in 'https://example.com/', 'https://www.wikipedia.org/', 'https://github.com/') {
     1..3 | ForEach-Object -Parallel { & curl.exe -sS -o NUL --max-time 20 $using:u } -ThrottleLimit 9
@@ -582,10 +588,10 @@ Pass 'measured'
 
 Step 'uninstall cleans only our own state'
 # as documented: the uninstall.ps1 from the extracted package folder
-& powershell -ExecutionPolicy Bypass -File (Join-Path $Package 'uninstall.ps1') -Purge
+& powershell -ExecutionPolicy Bypass -File (Join-Path $Package 'files\uninstall.ps1') -Purge
 Start-Sleep -Seconds 3
-if (Get-Service dpi-proxy -ErrorAction SilentlyContinue) { Die 'service still present' }
-if (Get-NetFirewallRule -Name dpi-proxy -ErrorAction SilentlyContinue) { Die 'firewall rule still present' }
+if (Get-Service nivyx -ErrorAction SilentlyContinue) { Die 'service still present' }
+if (Get-NetFirewallRule -Name nivyx -ErrorAction SilentlyContinue) { Die 'firewall rule still present' }
 if (Test-Path $InstDir) { Die "$InstDir still present" }
 if (Test-Path $DataDir) { Die "$DataDir still present after -Purge" }
 if (([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';') -contains $InstDir) { Die 'PATH entry still present' }

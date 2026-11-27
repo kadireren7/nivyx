@@ -34,7 +34,41 @@ man-in-the-middles TLS.
 
 ## Install
 
-### Linux
+Download the package for your system from
+[Releases](https://github.com/kadireren7/nivyx/releases/latest) and
+extract it:
+
+| File | For |
+|---|---|
+| `nivyx-windows-x86_64.zip` | Windows 10/11 x64 |
+| `nivyx-macos-arm64.zip` | Apple silicon Macs (M1/M2/M3/M4/...) |
+| `nivyx-macos-x86_64.zip` | Intel Macs |
+| `nivyx-linux-x86_64.tar.gz` | Linux x86_64 (Debian 12, Ubuntu 22.04 and newer) |
+
+Every package contains the same few things:
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| Install | `Install Nivyx.cmd` | `Install Nivyx.command` | `sudo ./install.sh` |
+| Update | `Update Nivyx.cmd` | `Update Nivyx.command` | `sudo ./update.sh` |
+| Uninstall | `Uninstall Nivyx.cmd` | `Uninstall Nivyx.command` | `sudo ./uninstall.sh` |
+| Command | `nivyx.cmd` | `nivyx` | `nivyx` |
+
+plus a short `QUICKSTART.txt` and a `files` folder the scripts use.
+Windows asks for administrator rights, macOS for your password.
+
+The installer checks DNS and HTTPS through the service before it
+finishes and starts it at boot: nothing to configure afterwards. Before
+installing, stop other DPI tools or VPN packet filters (`nivyx doctor`
+checks for the ones it can detect). `SHA256SUMS` in the release lists
+the checksum of every package.
+
+**Upgrading from v2.4.0 or earlier:** run the new package's installer
+once (its `nivyx update` cannot read the new package layout). Settings
+and learned state are kept; later updates work with `nivyx update`
+again.
+
+**Other Linux systems** (Fedora, Arch, arm64, ...) install from source:
 
 ```bash
 git clone https://github.com/kadireren7/nivyx.git
@@ -42,75 +76,13 @@ cd nivyx
 sudo ./scripts/install.sh
 ```
 
-Works on systemd + nftables based Linux distributions. On
-Debian/Ubuntu the installer automatically installs any missing
-dependencies (compiler, `make`, `nftables`, OpenSSL and its headers,
-`pkg-config`, `curl`) — nothing to install first. It then builds
-Nivyx, sets up the system service and starts it.
-
-[Linux guide](docs/linux.md)
-
-### Windows
-
-1. Download `nivyx-windows-x86_64.zip` from [Releases](https://github.com/kadireren7/nivyx/releases/latest).
-2. Extract it.
-3. Double-click **Install Nivyx.cmd** (not `dpi-proxy.exe`: that is the
-   internal engine the service runs).
-4. Accept the UAC prompt.
-
-[Windows guide](docs/windows.md)
-
-### macOS
-
-1. Download the correct ZIP from [Releases](https://github.com/kadireren7/nivyx/releases/latest):
-   - Apple silicon (M1/M2/M3/M4/...): `nivyx-macos-arm64.zip`
-   - Intel Mac: `nivyx-macos-x86_64.zip`
-2. Extract it.
-3. Double-click **Install Nivyx.command**.
-4. Enter your password when asked.
-
-[macOS guide](docs/macos.md)
-
-Each installer checks DNS and HTTPS through the service before it
-finishes, enables it at boot, and ends with `Nivyx is running.` —
-nothing to configure afterwards. Before installing, stop other DPI
-tools or VPN packet filters (`nivyx doctor` after install checks for
-the ones it can detect).
-
-Release files can be verified: every release ships `SHA256SUMS`, an
-SPDX SBOM, a release manifest and signed build provenance (`gh
-attestation verify <file> --repo kadireren7/nivyx`). `nivyx update` is
-prepared to require the maintainer's offline signature on that manifest
-(docs/release-signing.md); it is not enforced yet because no signing key
-has been set up; updates are verified with SHA-256 against
-`SHA256SUMS`.
+Guides: [Linux](docs/linux.md) · [Windows](docs/windows.md) · [macOS](docs/macos.md)
 
 **Testing status:** releases are tested automatically on GitHub-hosted
 Linux, macOS and Windows machines (install, upgrade, update, rollback,
 repair, uninstall). They have **not yet been validated on physical
 consumer devices** (real PCs and Macs with antivirus, Raspberry Pi, real
-DPI networks); see docs/RELEASE-CHECKLIST.md. Piping a downloaded script into a root shell
-is deliberately not offered: the Linux installer builds from the source
-you cloned, so you can read what it runs.
-
-## Downloads
-
-Most people need just one file: the Windows ZIP, or the macOS ZIP for their Mac. **Linux users should use the installer from the repository** (see above), not a download.
-
-| File | For |
-|---|---|
-| `nivyx-windows-x86_64.zip` | Windows 10/11 x64 |
-| `nivyx-macos-arm64.zip` | Apple silicon Macs |
-| `nivyx-macos-x86_64.zip` | Intel Macs |
-| `SHA256SUMS` | SHA-256 integrity verification |
-| `nivyx-<version>.spdx.json` | SBOM / dependency inventory |
-| `nivyx-release.manifest` | version and SHA-256 of every release file (prepared for signed updates) |
-
-A Linux archive (`nivyx-linux-x86_64.tar.gz`) is also attached; it exists only for `nivyx update` and is not an installer.
-
-An SBOM is a machine-readable list of software components and dependencies. You only need it, `SHA256SUMS` or the source archives if you want to verify a download or develop Nivyx.
-
-GitHub also automatically provides *Source code (zip)* and *Source code (tar.gz)*. These are source archives for developers, not normal installation packages.
+DPI networks); see docs/RELEASE-CHECKLIST.md.
 
 ## Usage
 
@@ -119,7 +91,7 @@ One command, the same on every platform (`start`/`stop`/`restart`/
 
 ```
 $ nivyx status
-Nivyx 2.4.0
+Nivyx 2.4.1
 Service: Running
 Protection: Active
 DNS: Healthy
@@ -148,8 +120,6 @@ nivyx help [command]
 
 Full reference, including exactly what `doctor` checks, what `repair`
 touches and what `support-bundle` redacts: [docs/cli.md](docs/cli.md).
-Linux and macOS also install `man nivyx` and tab completion; PowerShell
-completion ships as `nivyx-completion.ps1`.
 
 Output is colored on a terminal (green/yellow/red for
 healthy/warning/failed) and plain when piped, redirected, or when
@@ -189,9 +159,9 @@ A plain uninstall keeps your settings and learned state on every
 platform (a reinstall picks them up); `--purge` (Windows: `-Purge`)
 removes them too.
 
-Linux: `sudo ./scripts/uninstall.sh` (details: [docs/linux.md](docs/linux.md)).
-Windows: double-click `Uninstall Nivyx.cmd` (details: [docs/windows.md](docs/windows.md)).
-macOS: double-click `Uninstall Nivyx.command` (details: [docs/macos.md](docs/macos.md)).
+Windows: double-click `Uninstall Nivyx.cmd`. macOS: double-click
+`Uninstall Nivyx.command`. Linux: `sudo ./uninstall.sh` in the package
+(source installs: `sudo ./scripts/uninstall.sh`).
 
 ## Documentation
 
@@ -209,7 +179,7 @@ macOS: double-click `Uninstall Nivyx.command` (details: [docs/macos.md](docs/mac
   and measured resource use, per platform;
   [docs/performance-v2.2.md](docs/performance-v2.2.md) — v2.1 vs v2.2.
 - [docs/security.md](docs/security.md) — release trust, dependencies,
-  SBOM, provenance, privacy and logging.
+  provenance, privacy and logging.
 - [docs/packet-mode.md](docs/packet-mode.md),
   [docs/architecture.md](docs/architecture.md),
   [docs/discovery.md](docs/discovery.md),

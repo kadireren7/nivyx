@@ -4,7 +4,7 @@
 identical across Linux, Windows and macOS (`nivyx` on Linux/macOS is a
 bash/sh script; on Windows, `nivyx.cmd` runs the equivalent
 PowerShell). It is the only public command; the engine binary
-(`dpi-proxy`) is an internal component you never need to run.
+(`nivyx-engine`) is an internal component you never need to run.
 
 Commands that change service state (`start`/`stop`/`restart`/`reload`)
 need root (`sudo`) on Linux/macOS or an elevated/Administrator terminal
@@ -145,7 +145,7 @@ Nivyx-owned state, fixes what it can and prints every action, e.g.
 | Platform | What it can repair |
 |---|---|
 | Linux | stopped/failed/disabled service, stale status file, stale `inet dpi_proxy_tp` table while stopped, missing table while running (restarts the service), file permissions, missing config (recreated with defaults), damaged learned-decision lines (backup kept) |
-| macOS | unloaded or stopped launchd job, disabled job, stale status file, stale rules in the `com.apple/dpi-proxy` anchor, leftover PF enable reference, emptied anchor while running, permissions, missing config, damaged decision lines |
+| macOS | unloaded or stopped launchd job, disabled job, stale status file, stale rules in the `com.apple/nivyx` anchor, leftover PF enable reference, emptied anchor while running, permissions, missing config, damaged decision lines |
 | Windows | stopped service, startup type, missing firewall rule, missing PATH entry, stale status file, stale WinDivert driver state (only if no other WinDivert tool runs), missing config, damaged decision lines |
 
 Rules it keeps: it touches only Nivyx-owned objects, never edits your
@@ -160,7 +160,7 @@ installer. Exit status 1 if something remains that it cannot fix.
 ```
 $ nivyx update --check
 Current: 2.2.0
-Latest:  2.4.0
+Latest:  2.4.1
 Update available.
 ```
 
@@ -168,22 +168,23 @@ Update available.
 
 1. queries the official GitHub releases endpoint for the latest stable
    release and compares versions;
-2. picks the asset for this OS and architecture (`nivyx-linux-x86_64.tar.gz`,
-   an update archive rather than an installer; `nivyx-macos-<arch>.zip`,
-   `nivyx-windows-x86_64.zip`) and `SHA256SUMS`,
-   and refuses download URLs outside `github.com/kadireren7/nivyx`;
-3. verifies the SHA-256 **before** unpacking anything; once release
-   signing is set up (docs/release-signing.md) it also requires the signed
-   `nivyx-release.manifest`: a valid signature by a key the CLI carries,
-   the announced version (no substituted or replayed release), newer than
-   the installed one (no downgrade), and the archive's signed SHA-256 —
-   until then it prints `release signatures are not checked yet`; then it
-   checks that the new engine runs here and reports the expected version;
-4. backs up the files it replaces, swaps them in (rename-based on
-   Linux/macOS), restarts the service;
-5. runs a health check (the status file must come from the *new* service
-   process, and HTTPS must work through it);
-6. on any failure restores the previous version and says so.
+2. picks the package for this OS and architecture
+   (`nivyx-linux-x86_64.tar.gz`, `nivyx-macos-<arch>.zip`,
+   `nivyx-windows-x86_64.zip`) and `SHA256SUMS`, and refuses download
+   URLs outside `github.com/kadireren7/nivyx`;
+3. verifies the SHA-256 **before** unpacking anything, refuses a package
+   with links or paths outside its own folder, and checks that the new
+   engine runs here and reports the expected version;
+4. runs that package's own installer, which backs up the installed
+   version, installs the new one, restarts the service and runs its
+   health check (the status file must come from the *new* service
+   process, and DNS and HTTPS must work through it);
+5. on any failure the installer puts the previous version back, starts
+   it and says so.
+
+The `nivyx update` of v2.4.0 and earlier cannot install v2.4.1 or later
+(new package layout): it refuses and changes nothing. Run the new
+package's installer once instead; settings are kept.
 
 Configuration and learned state are never touched. There is no
 telemetry, no background checking and no automatic update: it runs only
@@ -192,12 +193,9 @@ for the test suite only: a notice is printed whenever it is set, and it
 must point at this machine (`http://127.0.0.1:PORT/...`) — any other
 override is refused, so it can never pull an update from elsewhere.
 
-Every file the update replaces (engine, CLI, man page, completions) is
-backed up under a unique name first, and the package is refused if it
-contains links or paths outside its own folder. If the rollback itself
-cannot bring the previous version back to health, the backup is kept
-and its location printed. "Nivyx updated" is printed only after the
-health check passed. Only one install, update, repair or uninstall runs
+If even the rollback cannot bring the previous version back to health,
+its backup is kept and its location printed. "Nivyx updated" is printed
+only after the health check passed. Only one install, update, repair or uninstall runs
 at a time.
 
 ### Status: what "Active" means
@@ -237,13 +235,12 @@ Prints the Nivyx version and exits.
 ## help [COMMAND]
 
 `nivyx --help` is the short overview; `nivyx help COMMAND` explains one
-command. Linux and macOS also install `man nivyx`.
+command. Source installs on Linux also install `man nivyx`.
 
 ## Shell completion
 
-Installed automatically: bash and fish (Linux), zsh (Linux and macOS).
-PowerShell: add `. "$env:ProgramFiles\dpi-proxy\nivyx-completion.ps1"`
-to your `$PROFILE`. Commands and options only, no network lookups.
+Source installs on Linux only (installed automatically): bash, zsh and fish. Commands and
+options only, no network lookups.
 
 ## Packet mode (Linux, optional, advanced)
 

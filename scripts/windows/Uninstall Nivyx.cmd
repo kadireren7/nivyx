@@ -1,16 +1,18 @@
 @echo off
 setlocal
-rem Nivyx: double-click uninstaller for Windows. Elevates itself and
-rem runs uninstall.ps1 from this same folder; the exit code is
-rem uninstall.ps1's own (1223 = UAC prompt declined, 6 = Windows could
-rem not start the elevated uninstaller for another reason, 3 = uninstall.ps1
-rem missing). Add -Purge to also remove settings and logs: run
-rem uninstall.ps1 directly for that (see WINDOWS-QUICKSTART.txt).
+rem Nivyx: double-click uninstaller for Windows, in the extracted ZIP
+rem folder and in %ProgramFiles%\Nivyx. Elevates itself and runs
+rem uninstall.ps1 (next to this file, or in files\). Settings are kept; to
+rem remove them too run uninstall.ps1 -Purge. Exit code: uninstall.ps1's
+rem own, 1223 = UAC prompt declined, 6 = Windows could not start it
+rem elevated, 3 = uninstall.ps1 missing.
 
-if not exist "%~dp0uninstall.ps1" (
-	echo Nivyx: uninstall.ps1 was not found next to this file.
-	echo Run "Uninstall Nivyx.cmd" from the Nivyx program folder
-	echo ^(%ProgramFiles%\dpi-proxy^) or from the extracted ZIP folder.
+set "UNINST=%~dp0uninstall.ps1"
+if not exist "%UNINST%" set "UNINST=%~dp0files\uninstall.ps1"
+if not exist "%UNINST%" (
+	echo Nivyx: uninstall.ps1 was not found.
+	echo Run "Uninstall Nivyx.cmd" from the extracted ZIP folder or from
+	echo the Nivyx program folder.
 	echo.
 	pause
 	exit /b 3
@@ -32,8 +34,6 @@ if "%RC%"=="1223" (
 	echo.
 	pause
 )
-rem 6: elevation itself failed for another reason (not a declined prompt),
-rem e.g. a policy that blocks it; the reason was printed above
 if "%RC%"=="6" (
 	echo.
 	echo Nivyx was NOT removed: Windows did not start it with administrator rights
@@ -46,7 +46,7 @@ exit /b %RC%
 :run
 cd /d "%~dp0"
 echo Uninstalling Nivyx...
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\uninstall.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%UNINST%"
 set RC=%errorlevel%
 echo.
 if not "%RC%"=="0" echo Uninstall reported error %RC%. See the messages above.

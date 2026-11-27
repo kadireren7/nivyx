@@ -1,19 +1,23 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Removes everything install.ps1 installed: the "dpi-proxy" service,
-  %ProgramFiles%\dpi-proxy, its firewall rule and PATH entry, and the
-  WinDivert driver service if no other program is using it.
-  %ProgramData%\dpi-proxy (your manual rules, learned decisions, log)
-  is kept unless -Purge is given. Needs an elevated PowerShell.
+  Removes everything install.ps1 installed: the "nivyx" service,
+  %ProgramFiles%\Nivyx, its firewall rule and PATH entry, and the
+  WinDivert driver service if no other program is using it. Leftovers of
+  v2.4.0 and earlier ("dpi-proxy") are removed too.
+  %ProgramData%\Nivyx (manual rules, learned decisions, log) is kept
+  unless -Purge is given. Needs an elevated PowerShell.
 #>
 [CmdletBinding()]
 param([switch]$Purge)
 
 $ErrorActionPreference = 'Continue'
-$Service = 'dpi-proxy'
-$InstDir = Join-Path $env:ProgramFiles 'dpi-proxy'
-$DataDir = Join-Path $env:ProgramData 'dpi-proxy'
+$Service = 'nivyx'
+$InstDir = Join-Path $env:ProgramFiles 'Nivyx'
+$DataDir = Join-Path $env:ProgramData 'Nivyx'
+$OldService = 'dpi-proxy'
+$OldInstDir = Join-Path $env:ProgramFiles 'dpi-proxy'
+$OldDataDir = Join-Path $env:ProgramData 'dpi-proxy'
 
 function Log($m) { Write-Host "[uninstall] $m" }
 
@@ -24,9 +28,8 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit 1
 }
 
-# One install/update/repair/uninstall at a time (install.ps1, uninstall.ps1,
-# nivyx update and repair share it): a machine-wide named mutex. Windows
-# releases it when its holder exits, also when the holder crashes.
+# One install/update/repair/uninstall at a time: a machine-wide named
+# mutex, released by Windows when its holder exits or crashes.
 function Enter-AdminLock([string]$who) {
     $script:AdminLock = New-Object System.Threading.Mutex($false, 'Global\NivyxAdminLock')
     $got = $false
@@ -38,14 +41,16 @@ function Enter-AdminLock([string]$who) {
 }
 Enter-AdminLock '[uninstall] ERROR: '
 
-if (Get-Service $Service -ErrorAction SilentlyContinue) {
-    Log 'stopping and removing the service'
-    Stop-Service $Service -Force -ErrorAction SilentlyContinue
-    & sc.exe delete $Service | Out-Null
+foreach ($s in $Service, $OldService) {
+    if (Get-Service $s -ErrorAction SilentlyContinue) {
+        Log "stopping and removing the service $s"
+        Stop-Service $s -Force -ErrorAction SilentlyContinue
+        & sc.exe delete $s | Out-Null
+    }
+    Get-NetFirewallRule -Name $s -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 }
-Get-NetFirewallRule -Name $Service -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 $path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-$kept = ($path -split ';') | Where-Object { $_ -and $_ -ne $InstDir }
+$kept = ($path -split ';') | Where-Object { $_ -and $_ -ne $InstDir -and $_ -ne $OldInstDir }
 [Environment]::SetEnvironmentVariable('Path', ($kept -join ';'), 'Machine')
 
 # The WinDivert driver is shared by every WinDivert-based program; only
@@ -60,21 +65,25 @@ if (-not $other -and (Get-Service WinDivert -ErrorAction SilentlyContinue)) {
     Log 'another WinDivert program is running; leaving the driver loaded'
 }
 
-if (Test-Path $InstDir) {
-    Log "removing $InstDir"
+foreach ($d in $InstDir, $OldInstDir) {
+    if (-not (Test-Path $d)) { continue }
+    Log "removing $d"
     # this script may be running from there: remove everything else first
-    Get-ChildItem $InstDir | Where-Object { $_.FullName -ne $PSCommandPath } |
+    Get-ChildItem $d | Where-Object { $_.FullName -ne $PSCommandPath } |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    if ($PSCommandPath -and $PSCommandPath.StartsWith($InstDir)) {
-        Start-Process -WindowStyle Hidden cmd.exe "/c timeout /t 2 >nul & rmdir /s /q `"$InstDir`""
+    if ($PSCommandPath -and $PSCommandPath.StartsWith($d)) {
+        Start-Process -WindowStyle Hidden cmd.exe "/c timeout /t 2 >nul & rmdir /s /q `"$d`""
     } else {
-        Remove-Item $InstDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 if ($Purge) {
-    Log "removing $DataDir"
-    Remove-Item $DataDir -Recurse -Force -ErrorAction SilentlyContinue
-} elseif (Test-Path $DataDir) {
-    Log "kept $DataDir (manual rules, learned decisions, log); -Purge removes it"
+    foreach ($d in $DataDir, $OldDataDir) {
+        if (Test-Path $d) { Log "removing $d"; Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+} else {
+    foreach ($d in $DataDir, $OldDataDir) {
+        if (Test-Path $d) { Log "kept $d (manual rules, learned decisions, log); -Purge removes it" }
+    }
 }
 Log 'done; networking is back to normal'

@@ -4,14 +4,14 @@
 #include <string.h>
 
 /* ============================================================
- * `dpi-proxy.exe --mode transparent --service`: the same server as a
- * native Windows service ("dpi-proxy", created by
+ * `nivyx-engine.exe --mode transparent --service`: the same server as a
+ * native Windows service ("nivyx", created by
  * scripts/windows/install.ps1). Stop/shutdown requests from the
  * service control manager ask the server to stop; it removes its
  * interception and returns, and the service reports STOPPED.
  * ============================================================ */
 
-#define SVC_NAME "dpi-proxy"
+#define SVC_NAME "nivyx"
 
 static SERVICE_STATUS_HANDLE	g_handle;
 static SERVICE_STATUS			g_status;
@@ -63,7 +63,7 @@ static void WINAPI	service_main(DWORD argc, LPSTR *argv)
 	/* a failed start ends in an error exit code, which lets the
 	 * service's recovery settings restart it */
 	/* service-specific code 1: "the engine could not start", shown by
-	 * `sc query dpi-proxy`; the reason is in dpi-proxy.log */
+	 * `sc query nivyx`; the reason is in nivyx.log */
 	g_status.dwServiceSpecificExitCode = (g_rc == 0) ? 0 : 1;
 	report(SERVICE_STOPPED, g_rc == 0 ? NO_ERROR : ERROR_SERVICE_SPECIFIC_ERROR,
 		0);

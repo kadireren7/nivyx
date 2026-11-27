@@ -1,4 +1,4 @@
-NAME = dpi-proxy
+NAME = nivyx-engine
 
 CC = cc
 
@@ -71,8 +71,8 @@ PACKET_OBJ = $(PACKET_SRC:.c=.o)
 TEST_SRC = $(wildcard tests/unit/test_*.c)
 TEST_BIN = $(TEST_SRC:.c=)
 
-# Transparent mode (`dpi-proxy --mode transparent`): Linux-only, built
-# into the same dpi-proxy binary on Linux. It reuses the SOCKS stream
+# Transparent mode (`nivyx-engine --mode transparent`): Linux-only, built
+# into the same nivyx-engine binary on Linux. It reuses the SOCKS stream
 # core (relay.c/upstream.c) plus these modules, and links OpenSSL
 # (libssl-dev) for its DNS-over-HTTPS resolver; runtime also needs the
 # nft and openssl binaries. Not part of the Windows build (WIN_OBJ uses
@@ -87,7 +87,6 @@ TP_SRC = \
 	src/transparent/dnsfwd.c \
 	src/transparent/platform_linux.c \
 	src/tlsclient.c \
-	src/release_verify.c \
 	src/compat.c \
 	src/dns/dns.c \
 	src/dns/dns_udp.c \
@@ -225,7 +224,7 @@ packet-mode:
 		src/nfqueue/nfqueue_engine.o \
 		src/discovery/probe_runner.o \
 		src/main_packet.o $$(pkg-config --libs libnetfilter_queue) \
-		-lpthread -o dpi-proxy-packet
+		-lpthread -o nivyx-packet-engine
 
 clean:
 	rm -f $(wildcard src/*.d src/*/*.d)
@@ -236,7 +235,7 @@ clean:
 		src/discovery/probe_runner.o
 
 fclean: clean
-	rm -f $(NAME) $(NAME).exe dpi-proxy-packet
+	rm -f $(NAME) $(NAME).exe nivyx-packet-engine dpi-proxy dpi-proxy.exe dpi-proxy-packet
 
 re: fclean all
 
@@ -269,7 +268,6 @@ WIN_TP_SRC = \
 	src/transparent/platform_windows.c \
 	src/transparent/svc_windows.c \
 	src/tlsclient.c \
-	src/release_verify.c \
 	src/compat.c \
 	src/dns/dns.c \
 	src/dns/dns_udp.c \

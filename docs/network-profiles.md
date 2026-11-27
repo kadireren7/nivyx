@@ -66,7 +66,7 @@ external service to compute any of it.** In particular:
 ## Seeing your current profile
 
 ```sh
-dpi-proxy-packet --status
+nivyx-packet-engine --status
 ```
 
 Prints, in one place: the current network (interface, link type,
@@ -80,8 +80,8 @@ local queries above.
 ## Export / import
 
 ```sh
-dpi-proxy-packet --export-profile my-strategies.conf
-dpi-proxy-packet --import-profile my-strategies.conf
+nivyx-packet-engine --export-profile my-strategies.conf
+nivyx-packet-engine --import-profile my-strategies.conf
 ```
 
 The discovery cache is already a portable, human-readable text file

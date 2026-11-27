@@ -7,6 +7,24 @@ per-network learning. Real ISP/DPI field-tested.
 
 ## Install
 
+**From the release package** (x86_64 with glibc 2.35+ and OpenSSL 3:
+Debian 12, Ubuntu 22.04 and newer; nothing is compiled):
+
+```sh
+tar -xzf nivyx-linux-x86_64.tar.gz
+cd nivyx-linux-x86_64
+sudo ./install.sh          # update: sudo ./update.sh   remove: sudo ./uninstall.sh
+```
+
+The package holds `install.sh`, `update.sh`, `uninstall.sh`, the `nivyx`
+command, `QUICKSTART.txt` and a `files` folder (the prebuilt engine, the
+systemd unit, the license). On Debian/Ubuntu a missing `nftables` is
+installed with `apt-get`. If the prebuilt engine cannot run (another
+OpenSSL, another processor) the installer says so and changes nothing.
+
+**From source** (any systemd + nftables distribution, also arm64,
+Fedora and Arch):
+
 ```sh
 git clone https://github.com/kadireren7/nivyx.git
 cd nivyx
@@ -40,7 +58,6 @@ any package manager — install it yourself and re-run. Distributions
 without systemd (OpenRC, runit, Slackware, ...) are not supported by the
 installer, because the service integration depends on systemd.
 
-There is no standalone Linux download: use the installer above.
 
 ## Commands
 
@@ -113,7 +130,7 @@ dependencies are installed automatically only on the Debian family).
 CI builds and unit-tests the engine against OpenSSL 3 and against the
 OpenSSL 4 that Fedora and Arch now ship.
 
-`nivyx update` installs a prebuilt engine that needs glibc 2.35+ and
+The release package (and `nivyx update`) installs a prebuilt engine that needs glibc 2.35+ and
 **OpenSSL 3** (`libssl.so.3`): built on Ubuntu 22.04, run in CI on Debian
 12, Ubuntu 22.04/24.04 and openSUSE Tumbleweed. On distributions with
 OpenSSL 4 (Fedora 45+, Arch) it cannot run; `nivyx update` says so and
@@ -159,8 +176,8 @@ mode replaces it as the automatic engine. See
 
 ## SOCKS5 mode
 
-`dpi-proxy` run without arguments is a plain local SOCKS5 proxy on
-`127.0.0.1:1080` (`DPI_PROXY_SPLIT_TLS=record ./dpi-proxy` for the
+`nivyx-engine` run without arguments is a plain local SOCKS5 proxy on
+`127.0.0.1:1080` (`DPI_PROXY_SPLIT_TLS=record ./nivyx-engine` for the
 bypass) — on every platform, not just Linux.
 
 See also: [../README.md](../README.md) for the platform-independent

@@ -1,0 +1,13 @@
+Nivyx for macOS 11 or later
+
+Install:    double-click "Install Nivyx.command" and enter your password.
+            Websites and apps then work normally; nothing else to set up.
+Update:     double-click "Update Nivyx.command".
+Uninstall:  double-click "Uninstall Nivyx.command" (your settings are kept).
+
+Check it:   open Terminal and run  nivyx status
+Problems:   nivyx doctor
+
+If macOS says the file cannot be opened: right-click it, choose Open,
+then Open again.
+More: https://github.com/kadireren7/nivyx

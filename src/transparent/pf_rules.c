@@ -56,8 +56,8 @@ size_t	tp_pf_ruleset(char *out, size_t out_size, int port, int ipv6,
 	/* "every source port except ours" */
 	snprintf(src, sizeof(src), "from any port %d <> %d",
 		TP_PF_OWN_PORT_LO, TP_PF_OWN_PORT_HI);
-	put(&o, "# dpi-proxy transparent mode (anchor %s). Generated and owned "
-		"by dpi-proxy;\n# removed when it stops.\n", TP_PF_ANCHOR);
+	put(&o, "# Nivyx transparent mode (anchor %s). Generated and owned "
+		"by nivyx-engine;\n# removed when it stops.\n", TP_PF_ANCHOR);
 	put(&o, "table <dpi_local4> const { 0.0.0.0/8, 10.0.0.0/8, "
 		"100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, "
 		"192.168.0.0/16, 224.0.0.0/3 }\n");

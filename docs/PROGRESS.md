@@ -376,3 +376,29 @@ install from source). Ed25519 infrastructure stays inactive; no key.
 Pre-merge validation on 6bf9c83: build 45793692154 34/34; release dry run
 45793712918 41/42 (publish skipped by design). Publication results are
 recorded below after the tag ran.
+
+## v2.4.1: simple packages, one name (2026-11-28)
+
+Decisions (maintainer): every package holds only Install / Update /
+Uninstall, the `nivyx` command, a short `QUICKSTART.txt` and `files/`;
+`nivyx` everywhere (no `dpi-proxy`); a release is the four packages plus
+`SHA256SUMS`; the release-signing infrastructure is removed from the code
+(release_verify.c, release-keys, manifest, signature tests, release-signing
+doc), the SBOM is dropped (its Windows OpenSSL pin check moved into
+scripts/windows/package.sh); man page and shell completions are no longer
+shipped in the macOS/Windows packages (Linux source installs keep them).
+
+Clean break, chosen deliberately: the `nivyx update` of v2.2.x-v2.4.0
+refuses the new layout ("unexpected package layout; nothing was
+installed", checked against the tagged sources) and changes nothing;
+users run the new package's Install/Update once. The installers move
+macOS/Windows "dpi-proxy" installs to the nivyx names (service, launchd
+label, PF anchor, folders, firewall rule) with rollback to the old
+service; `nivyx update` now runs the downloaded package's own installer.
+Linux gained a prebuilt package install (scripts/install.sh detects
+files/nivyx-engine). CI and release tests were rewritten for this (old
+updaters refuse safely; migration keeps rule and learned state; layout
+checks of every package top level).
+
+Not verified locally: PowerShell scripts (no pwsh here) and every
+root/admin path on all platforms; CI is the first real run.

@@ -8,10 +8,7 @@
   start/stop/restart/reload/repair/update need an elevated terminal.
 
   This one script is the whole implementation; nivyx.cmd calls into it.
-  Internal identifiers (the "dpi-proxy"
-  Windows service name, install/data folders, dpi-proxy.exe) are kept
-  unchanged from pre-rebrand installs — only user-facing output and
-  command names change here.
+  Service "nivyx", %ProgramFiles%\Nivyx, %ProgramData%\Nivyx.
 #>
 param(
     [Parameter(Position = 0)][string]$Command = 'status',
@@ -20,12 +17,12 @@ param(
     [Parameter(Position = 3)][string]$Arg3
 )
 
-$Service    = 'dpi-proxy'
-$InstDir    = Join-Path $env:ProgramFiles 'dpi-proxy'
-$DataDir    = Join-Path $env:ProgramData 'dpi-proxy'
+$Service    = 'nivyx'
+$InstDir    = Join-Path $env:ProgramFiles 'Nivyx'
+$DataDir    = Join-Path $env:ProgramData 'Nivyx'
 $StatusFile = Join-Path $DataDir 'transparent.status'
-$LogFile    = Join-Path $DataDir 'dpi-proxy.log'
-$Exe        = Join-Path $InstDir 'dpi-proxy.exe'
+$LogFile    = Join-Path $DataDir 'nivyx.log'
+$Exe        = Join-Path $InstDir 'nivyx-engine.exe'
 $StrategyConf = Join-Path $DataDir 'strategy.conf'
 $DecisionsFile = Join-Path $DataDir 'tp-decisions.conf'
 
@@ -64,7 +61,7 @@ function Is-Elevated {
 function Get-VersionString {
     if (Test-Path $Exe) {
         $out = & $Exe --version 2>$null
-        if ($out -match 'dpi-proxy (.+)') { return $Matches[1] }
+        if ($out -match 'nivyx-engine (.+)') { return $Matches[1] }
     }
     return $null
 }
@@ -500,9 +497,9 @@ function Invoke-Repair {
     } else { Okay 'service starts automatically' }
 
     if (-not (Get-NetFirewallRule -Name $Service -ErrorAction SilentlyContinue)) {
-        New-NetFirewallRule -Name $Service -DisplayName 'dpi-proxy (redirected local traffic)' `
+        New-NetFirewallRule -Name $Service -DisplayName 'Nivyx (redirected local traffic)' `
             -Direction Inbound -Program $Exe -Action Allow -Profile Any | Out-Null
-        Fixed 'recreated the inbound firewall rule for dpi-proxy.exe (ours only)'
+        Fixed 'recreated the inbound firewall rule for nivyx-engine.exe (ours only)'
     } else { Okay 'firewall rule present' }
 
     $path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -524,9 +521,10 @@ function Invoke-Repair {
 }
 
 # ---- update -----------------------------------------------------------------
-# Only on explicit request. Official GitHub releases; SHA-256 verified against
-# SHA256SUMS before anything is installed; config and learned state untouched;
-# a failed health check restores the previous version.
+# Only on explicit request. Official GitHub releases; the package's SHA-256 is
+# checked against SHA256SUMS before anything is unpacked; then the package's
+# own installer runs, which keeps settings and learned state and restores the
+# previous version if the new one fails its health check.
 # NIVYX_RELEASE_API overrides the endpoint (test suite only; announced).
 
 # .NET instead of Get-FileHash: that cmdlet failed to load when Windows
@@ -538,94 +536,8 @@ function Get-Sha256([string]$path) {
     finally { $fs.Dispose(); $sha.Dispose() }
 }
 
-# ---- release signature ------------------------------------------------------
-# The release manifest (nivyx-release.manifest) must carry a valid signature
-# (nivyx-release.manifest.sig) by one of these keys, name the version being
-# installed and list the download's SHA-256; checked by the installed engine
-# before anything downloaded is unpacked or run. Enforced once this list holds
-# a key. It is empty until the maintainer sets up the offline signing key
-# (docs/release-signing.md): until then the SHA256SUMS check is the only one,
-# as in earlier versions.
-# BEGIN RELEASE KEYS (from scripts/release-keys.txt by scripts/release-keys.sh sync)
-$ReleaseKeys = @'
-'@
-# END RELEASE KEYS
-$ManifestName = 'nivyx-release.manifest'
-
-# Exits on any failure. $rel: the release JSON; $got: the download's SHA-256.
-function Confirm-ReleaseSignature($rel, [string]$work, [string]$assetName, [string]$got, [string]$latest, [string]$current) {
-    $keys = Join-Path $work 'release-keys'
-    if ($env:NIVYX_TEST_RELEASE_KEYS) {
-        # the test suite's temporary keys; only together with the
-        # loopback-only NIVYX_RELEASE_API (checked before this)
-        if (-not $env:NIVYX_RELEASE_API) { Write-Host 'nivyx: NIVYX_TEST_RELEASE_KEYS is for the test suite (with NIVYX_RELEASE_API)'; exit 1 }
-        Write-Host "note: using test release keys $($env:NIVYX_TEST_RELEASE_KEYS)"
-        $lines = @(Get-Content $env:NIVYX_TEST_RELEASE_KEYS | Where-Object { $_ -match '^ed25519 ' })
-    } else {
-        $lines = @($ReleaseKeys -split "`r?`n" | Where-Object { $_ -match '^ed25519 ' })
-    }
-    if ($lines.Count -eq 0) {
-        Write-Host 'note: release signatures are not checked yet (no release key configured in this version)'
-        return
-    }
-    [System.IO.File]::WriteAllText($keys, (($lines -join "`n") + "`n"))
-    $m = $rel.assets | Where-Object { $_.name -eq $ManifestName } | Select-Object -First 1
-    $s = $rel.assets | Where-Object { $_.name -eq "$ManifestName.sig" } | Select-Object -First 1
-    if (-not $m -or -not $s) { Write-Host "nivyx: release $latest is not signed (no $ManifestName and/or $ManifestName.sig); nothing was installed"; exit 1 }
-    Confirm-DownloadUrl $m.browser_download_url
-    Confirm-DownloadUrl $s.browser_download_url
-    $man = Join-Path $work $ManifestName; $sig = Join-Path $work "$ManifestName.sig"
-    try {
-        Invoke-WebRequest -Uri $m.browser_download_url -OutFile $man -UseBasicParsing -TimeoutSec 60
-        Invoke-WebRequest -Uri $s.browser_download_url -OutFile $sig -UseBasicParsing -TimeoutSec 60
-    } catch { Write-Host 'nivyx: could not download the release signature; nothing was installed'; exit 1 }
-    if ((Get-Item $man).Length -gt 1MB -or (Get-Item $sig).Length -gt 64KB) { Write-Host 'nivyx: the release signature files are too large; nothing was installed'; exit 1 }
-    if (-not (Test-Path $Exe)) { Write-Host "nivyx: $Exe is missing: cannot check the release signature; nothing was installed"; exit 1 }
-    # stderr as plain text: with ErrorActionPreference Stop, Windows
-    # PowerShell would turn the engine's stderr line into an exception
-    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    $out = ((& $Exe --verify-release $keys $man $sig 2>&1 | ForEach-Object { "$_" }) -join ' ').Trim()
-    $rc = $LASTEXITCODE
-    $ErrorActionPreference = $prev
-    if ($rc -ne 0) { Write-Host "nivyx: the release signature is not valid: $out; nothing was installed"; exit 1 }
-    # parsed only after the signature check, as bytes (no encoding guess)
-    $text = [System.IO.File]::ReadAllText($man, [System.Text.Encoding]::ASCII)
-    $ml = @($text -split "`n")
-    $versions = @($ml | Where-Object { $_ -cmatch '^version ' })
-    if ($ml[0] -cne 'nivyx-release-manifest 1' -or @($ml | Where-Object { $_ -ceq 'product nivyx' }).Count -ne 1 -or $versions.Count -ne 1) {
-        Write-Host 'nivyx: the signed manifest has an unknown format; nothing was installed'; exit 1
-    }
-    $mver = if ($versions[0] -cmatch '^version (\d+(\.\d+)*)$') { $Matches[1] } else { '' }
-    if ($mver -ne $latest) {
-        Write-Host "nivyx: the signed manifest is for version $(if ($mver) { $mver } else { '?' }), the release claims ${latest}: refusing a substituted or replayed release; nothing was installed"; exit 1
-    }
-    if (-not (Test-NewerVersion $mver $current)) {
-        Write-Host "nivyx: the signed release $mver is not newer than the installed ${current}: refusing a downgrade; nothing was installed"; exit 1
-    }
-    $want = @($ml | Where-Object { $_ -cmatch "^sha256 ([0-9a-f]{64}) $([regex]::Escape($assetName))$" } | ForEach-Object { ($_ -split ' ')[1] })
-    if ($want.Count -ne 1 -or $want[0] -ne $got) { Write-Host "nivyx: $assetName does not match the signed manifest; nothing was installed"; exit 1 }
-    Write-Host "Release signature verified ($($out -replace '^verified: ', ''))."
-}
-
-# Official repository only; with the test override, this machine only.
-function Confirm-DownloadUrl([string]$u) {
-    if (-not $env:NIVYX_RELEASE_API) {
-        if (-not $u.StartsWith('https://github.com/kadireren7/nivyx/releases/download/')) { Write-Host 'nivyx: refusing a download URL outside the official repository'; exit 1 }
-    } elseif ($u -notmatch '^https?://(127\.0\.0\.1|localhost)(:\d+)?/' -or $env:NIVYX_RELEASE_API -notmatch '^https?://(127\.0\.0\.1|localhost)(:\d+)?/') {
-        Write-Host "nivyx: NIVYX_RELEASE_API is for the test suite and must point at this machine (http://127.0.0.1:PORT/...); refusing $u"; exit 1
-    }
-}
-
 function Test-NewerVersion([string]$latest, [string]$current) {
     try { return ([version]$latest -gt [version]$current) } catch { return $false }
-}
-
-function Test-UpdateHealthy {
-    if (-not (Wait-Healthy 30)) { return $false }
-    try {
-        $r = Invoke-WebRequest -Uri 'https://example.com/' -Method Head -UseBasicParsing -TimeoutSec 15
-        return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 400)
-    } catch { return $false }
 }
 
 function Invoke-Update([bool]$checkOnly) {
@@ -684,7 +596,6 @@ function Invoke-Update([bool]$checkOnly) {
             exit 1
         }
         Write-Host 'SHA-256 verified.'
-        Confirm-ReleaseSignature $rel $work $assetName $got $latest $current
 
         # .NET directly, not Expand-Archive: Windows PowerShell started from
         # PowerShell 7 inherits its PSModulePath and loads an Archive module
@@ -702,75 +613,33 @@ function Invoke-Update([bool]$checkOnly) {
             }
         } finally { $za.Dispose() }
         [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $work)
-        $pkg = Join-Path $work 'nivyx-windows-x86_64'
-        $newExe = Join-Path $pkg 'dpi-proxy.exe'
-        if (-not (Test-Path $newExe) -or -not (Test-Path (Join-Path $pkg 'nivyx-impl.ps1'))) {
+        $files = Join-Path $work 'nivyx-windows-x86_64\files'
+        $newExe = Join-Path $files 'nivyx-engine.exe'
+        $installer = Join-Path $files 'install.ps1'
+        if (-not (Test-Path $newExe) -or -not (Test-Path $installer)) {
             Write-Host 'nivyx: unexpected package layout; nothing was installed'; exit 1
         }
         if (-not ((& $newExe --capabilities 2>$null) -match '^transparent_mode: supported')) {
             Write-Host 'nivyx: the downloaded engine does not run here; nothing was installed'; exit 1
         }
-        if (-not ((& $newExe --version 2>$null) -match "dpi-proxy $([regex]::Escape($latest))$")) {
+        if (-not ((& $newExe --version 2>$null) -match "nivyx-engine $([regex]::Escape($latest))$")) {
             Write-Host "nivyx: the downloaded engine is not version $latest; nothing was installed"; exit 1
         }
 
-        # back up what changes, then swap with the service stopped
-        # unique per update: a second update never mixes its files with this one's
-        $bak = Join-Path $DataDir ('update-rollback-' + [guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Force -Path $bak | Out-Null
-        $files = 'dpi-proxy.exe', 'nivyx-impl.ps1', 'uninstall.ps1', 'nivyx-completion.ps1', 'Uninstall Nivyx.cmd'
-        foreach ($f in $files + 'WinDivert.dll', 'WinDivert64.sys') {
-            $p = Join-Path $InstDir $f
-            if (Test-Path $p) { Copy-Item $p $bak -Force }
+        # The package's installer does the rest (backup, swap, health check,
+        # rollback). It runs in Windows PowerShell with its own module path,
+        # also when this was started from PowerShell 7.
+        Write-Host "Installing $latest ..."
+        $env:NIVYX_FROM_UPDATE = '1'
+        $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
+        $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        & $ps -NoProfile -ExecutionPolicy Bypass -File $installer
+        $rc = $LASTEXITCODE
+        if ($rc -ne 0) {
+            Write-Host "nivyx: the update to $latest did not complete (installer exit code $rc); see the messages above"
+            exit 1
         }
-        Write-Host 'Installing; restarting the service ...'
-        Stop-Service $Service -Force -ErrorAction SilentlyContinue
-        $changedDriver = $false
-        foreach ($f in 'WinDivert.dll', 'WinDivert64.sys') {
-            $np = Join-Path $pkg $f; $op = Join-Path $InstDir $f
-            if ((Test-Path $np) -and (-not (Test-Path $op) -or (Get-Sha256 $np) -ne (Get-Sha256 $op))) { $changedDriver = $true }
-        }
-        if ($changedDriver) { & sc.exe stop WinDivert | Out-Null; Start-Sleep -Seconds 1 }
-        $copyOk = $true
-        try {
-            foreach ($f in $files + 'WinDivert.dll', 'WinDivert64.sys') {
-                $np = Join-Path $pkg $f; $op = Join-Path $InstDir $f
-                if (Test-Path $np) {
-                    if (($f -in @('WinDivert.dll', 'WinDivert64.sys')) -and (Test-Path $op) -and (Get-Sha256 $np) -eq (Get-Sha256 $op)) { continue }
-                    Copy-Item $np $op -Force -ErrorAction Stop
-                }
-            }
-            Start-Service $Service
-        } catch { $copyOk = $false; Write-Host "nivyx: install step failed: $($_.Exception.Message)" }
-
-        if ($copyOk -and (Test-UpdateHealthy)) {
-            # nivyx.cmd is read by cmd.exe while it runs: replace it only
-            # after this process has exited (and only once the update is kept)
-            $newCmd = Join-Path $pkg 'nivyx.cmd'; $curCmd = Join-Path $InstDir 'nivyx.cmd'
-            if ((Test-Path $newCmd) -and (Get-Sha256 $newCmd) -ne (Get-Sha256 $curCmd)) {
-                $staged = Join-Path $InstDir 'nivyx.cmd.new'
-                Copy-Item $newCmd $staged -Force
-                Start-Process -WindowStyle Hidden cmd.exe "/c timeout /t 3 >nul & move /y `"$staged`" `"$curCmd`" >nul"
-            }
-            Remove-Item $bak -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Host 'Health check passed.'
-            Write-Host "Nivyx updated to $latest. Configuration and learned state were kept."
-            return
-        }
-        Write-Host "nivyx: the new version failed its health check; restoring $current"
-        Stop-Service $Service -Force -ErrorAction SilentlyContinue
-        & sc.exe stop WinDivert | Out-Null
-        Start-Sleep -Seconds 1
-        foreach ($f in Get-ChildItem $bak -File) { Copy-Item $f.FullName (Join-Path $InstDir $f.Name) -Force }
-        Start-Service $Service -ErrorAction SilentlyContinue
-        if (Test-UpdateHealthy) {
-            Remove-Item $bak -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Host "nivyx: rolled back; Nivyx $current is running again"
-        } else {
-            Write-Host 'nivyx: rollback finished but the service is still unhealthy: run nivyx repair'
-            Write-Host "nivyx: the previous files are kept in $bak"
-        }
-        exit 1
+        Write-Host "Nivyx updated to $latest. Configuration and learned state were kept."
     } finally {
         Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -789,7 +658,7 @@ function Doctor-Permissions {
     if (Is-Elevated) { Check PASS 'permissions: running elevated - full diagnostics available' }
     else { Check WARN 'permissions: not elevated - some checks are limited; re-run as Administrator for full detail' }
     if (Test-Path $Exe) { Check PASS "permissions: $Exe is present" }
-    else { Check FAIL "permissions: dpi-proxy.exe not found at $Exe" }
+    else { Check FAIL "permissions: nivyx-engine.exe not found at $Exe" }
 }
 
 function Doctor-Service {
@@ -835,7 +704,7 @@ function Doctor-Reachability {
 }
 
 function Doctor-Bypass {
-    if (-not (Test-Path $Exe)) { Check WARN 'bypass path: dpi-proxy.exe not found'; return }
+    if (-not (Test-Path $Exe)) { Check WARN 'bypass path: nivyx-engine.exe not found'; return }
     $caps = & $Exe --capabilities 2>$null
     if ($caps -match '^transparent_mode: supported') { Check PASS 'bypass path: this binary supports transparent mode' }
     else { Check FAIL 'bypass path: this binary was built without transparent mode support' }

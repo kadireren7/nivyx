@@ -29,7 +29,7 @@ static void	log_windivert_error(DWORD err)
 	switch (err)
 	{
 		case ERROR_FILE_NOT_FOUND:
-			why = "WinDivert64.sys was not found next to dpi-proxy.exe "
+			why = "WinDivert64.sys was not found next to nivyx-engine.exe "
 				"(removed by antivirus? re-run Install Nivyx.cmd)";
 			break ;
 		case ERROR_BAD_EXE_FORMAT:

@@ -1,8 +1,8 @@
 # Transparent mode (Linux, Windows, macOS)
 
-`dpi-proxy --mode transparent`, run by the `nivyx`
-systemd service on Linux, the `dpi-proxy` service on Windows and the
-`io.github.kadireren7.dpi-proxy` launchd daemon on macOS. It is
+`nivyx-engine --mode transparent`, run by the `nivyx`
+systemd service on Linux, the `nivyx` service on Windows and the
+`io.github.kadireren7.nivyx` launchd daemon on macOS. It is
 the recommended way to use Nivyx: after installing, every
 application's HTTPS and DNS go through it, with no proxy settings and
 no DNS settings anywhere.
@@ -112,7 +112,7 @@ decisions live in `/var/lib/nivyx/tp-decisions.conf`.
 
 The daemon is the same; interception uses the WinDivert driver
 (third-party, signed, LGPLv3/GPLv2, shipped unmodified next to
-`dpi-proxy.exe`) and the "reflection" technique from WinDivert's own
+`nivyx-engine.exe`) and the "reflection" technique from WinDivert's own
 samples:
 
 ```
@@ -142,9 +142,9 @@ port 1053.
   The service is restarted automatically after a crash.
 - **QUIC:** only QUIC long-header (handshake) packets are captured at
   all; those to known-blocked addresses are dropped.
-- A Windows Firewall rule (`dpi-proxy`, inbound, this program only) lets
+- A Windows Firewall rule (`nivyx`, inbound, this program only) lets
   the reflected connections reach the service.
-- Logs: `%ProgramData%\dpi-proxy\dpi-proxy.log` (rotated at 4 MB);
+- Logs: `%ProgramData%\Nivyx\nivyx.log` (rotated at 4 MB);
   `nivyx logs`.
 
 ## macOS
@@ -171,7 +171,7 @@ DNS (UDP and TCP port 53, to any server but loopback and IPv6
 link-local) takes the same path to the forwarder on port 1053.
 
 - **Only our own anchor.** All rules live in the PF anchor
-  `com.apple/dpi-proxy`. macOS's own `/etc/pf.conf` evaluates every
+  `com.apple/nivyx`. macOS's own `/etc/pf.conf` evaluates every
   anchor under `com.apple/`, so neither `/etc/pf.conf` nor the loaded
   main ruleset is modified (if a custom main ruleset lacks the
   `rdr-anchor "com.apple/*"` / `anchor "com.apple/*"` lines, the daemon
@@ -182,7 +182,7 @@ link-local) takes the same path to the forwarder on port 1053.
   keeps an anchor's *name* registered until reboot even when it is
   empty — no `pfctl` operation removes it, not even `-F all` — so
   after a stop or uninstall `pfctl -a com.apple -s Anchors` still
-  lists an empty `com.apple/dpi-proxy`, like Apple's own empty
+  lists an empty `com.apple/nivyx`, like Apple's own empty
   anchors next to it. It holds no rules or tables and does nothing.)
 - **PF on/off is reference-counted.** The daemon enables PF with
   `pfctl -E` and releases exactly that reference (`pfctl -X`) when it
@@ -225,12 +225,12 @@ link-local) takes the same path to the forwarder on port 1053.
   routing socket; the rules are interface-independent, so they keep
   working on any new interface. The network profile is the default
   route's interface, gateway and gateway MAC address.
-- Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/nivyx`,
-  `/Library/LaunchDaemons/io.github.kadireren7.dpi-proxy.plist`,
-  `/usr/local/etc/dpi-proxy/strategy.conf`,
-  `/usr/local/var/dpi-proxy/tp-decisions.conf`, the status file and PF
-  reference token in `/var/run/dpi-proxy/`, log
-  `/var/log/dpi-proxy.log` (rotated at 4 MB; `nivyx logs`).
+- Files: `/usr/local/bin/nivyx-engine`, `/usr/local/bin/nivyx`,
+  `/Library/LaunchDaemons/io.github.kadireren7.nivyx.plist`,
+  `/usr/local/etc/nivyx/strategy.conf`,
+  `/usr/local/var/nivyx/tp-decisions.conf`, the status file and PF
+  reference token in `/var/run/nivyx/`, log
+  `/var/log/nivyx.log` (rotated at 4 MB; `nivyx logs`).
   `sudo ./uninstall.sh` removes all of them.
 
 ## Limitations

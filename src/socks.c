@@ -297,7 +297,7 @@ int	run_socks_server(const char *host, int port)
 		return (-1);
 	}
 
-	printf("dpi-proxy listening on %s:%d\n",
+	printf("nivyx-engine listening on %s:%d\n",
 		host != NULL ? host : "127.0.0.1", port);
 
 	while (1)

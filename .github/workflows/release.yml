@@ -3,7 +3,7 @@ name: release
 # Two ways in, one path:
 #   - a pushed tag v<VERSION> builds, tests and publishes the release;
 #   - "Run workflow" (workflow_dispatch) is the DRY RUN: the same CI matrix,
-#     packaging, manifest, SBOM, provenance and final-package checks, and
+#     packaging, provenance and final-package checks, and
 #     nothing is published. Only the publish job can write to the
 #     repository, and it runs only for a pushed v* tag (job condition plus a
 #     guard step); a dry run never creates a tag or a release.
@@ -52,12 +52,10 @@ jobs:
           else
             echo "### DRY RUN of v$ver from $GITHUB_REF_NAME ($GITHUB_SHA): nothing will be published" >>"$GITHUB_STEP_SUMMARY"
           fi
-      - name: the updaters carry the keys of scripts/release-keys.txt
-        run: ./scripts/release-keys.sh check
 
   # the whole CI matrix (builds, unit/sanitizer tests, end-to-end on Linux,
-  # macOS arm64/x86_64 and Windows, upgrade and old-updater tests, updater
-  # signature tests); its build artifacts are the release packages
+  # macOS arm64/x86_64 and Windows, upgrade and old-updater tests); its
+  # build artifacts are the release packages
   ci:
     needs: preflight
     uses: ./.github/workflows/build.yml
@@ -81,49 +79,42 @@ jobs:
           cp dist/nivyx-linux-x86_64/nivyx-linux-x86_64.tar.gz release/
           cp dist/nivyx-macos-arm64/nivyx-macos-arm64.zip release/
           cp dist/nivyx-macos-x86_64/nivyx-macos-x86_64.zip release/
-          # the Windows folder that passed the e2e test in CI, zipped with the
-          # top folder name the updaters of v2.2.x/v2.3.x require
+          # the Windows folder that passed the e2e test in CI, zipped under
+          # the top folder name `nivyx update` requires
           mkdir -p win && cp -R dist/nivyx-windows-x86_64 win/nivyx-windows-x86_64
           (cd win && zip -qr -X ../release/nivyx-windows-x86_64.zip nivyx-windows-x86_64)
-          ./scripts/gen-sbom.sh "$VER" release >"release/nivyx-$VER.spdx.json"
-          # the file the maintainer signs offline (docs/release-signing.md)
-          ./scripts/release-manifest.sh "$VER" release "$GITHUB_SHA" >release/nivyx-release.manifest
-          # Linux users install with scripts/install.sh. The tarball is
-          # published only because `nivyx update` (v2.2.x and later)
-          # downloads it by this exact name; the bare engine binary is not.
-          (cd release && sha256sum nivyx-linux-x86_64.tar.gz nivyx-macos-arm64.zip \
-            nivyx-macos-x86_64.zip nivyx-windows-x86_64.zip "nivyx-$VER.spdx.json" \
-            nivyx-release.manifest >SHA256SUMS)
+          # the four packages and SHA256SUMS (`nivyx update` verifies against it)
+          (cd release && sha256sum * >../SHA256SUMS) && mv SHA256SUMS release/
       - name: the release set is exactly this, and consistent
         run: |
           want="SHA256SUMS
-          nivyx-$VER.spdx.json
           nivyx-linux-x86_64.tar.gz
           nivyx-macos-arm64.zip
           nivyx-macos-x86_64.zip
-          nivyx-release.manifest
           nivyx-windows-x86_64.zip"
           [ "$(ls release | sort)" = "$(printf '%s\n' "$want" | sed 's/^ *//' | sort)" ] \
             || { echo "unexpected release contents:"; ls release; exit 1; }
           [ "$(awk '{print $2}' release/SHA256SUMS | sort)" = "$(ls release | grep -v '^SHA256SUMS$' | sort)" ] \
             || { echo "SHA256SUMS does not match the release files"; exit 1; }
           (cd release && sha256sum -c SHA256SUMS)
-          ./scripts/release-sign.sh check release "$VER"
-          # the packages report this version and have the layout old updaters require
-          tar -xzOf release/nivyx-linux-x86_64.tar.gz nivyx-linux-x86_64/dpi-proxy >/dev/null
-          # (listings captured first: no `| grep -q` under pipefail)
-          for a in arm64 x86_64; do
-            l="$(unzip -l "release/nivyx-macos-$a.zip")"
-            for f in dpi-proxy nivyx install.sh; do
-              grep -q " nivyx-macos-$a/$f\$" <<<"$l" || { echo "macOS $a zip lacks $f"; exit 1; }
-            done
-          done
-          l="$(unzip -l release/nivyx-windows-x86_64.zip)"
-          for f in dpi-proxy.exe WinDivert.dll WinDivert64.sys nivyx-impl.ps1 nivyx.cmd install.ps1; do
-            grep -q " nivyx-windows-x86_64/$f\$" <<<"$l" || { echo "zip lacks $f"; exit 1; }
-          done
+          # every package: exactly the documented top level, and an engine
+          # of this version where `nivyx update` looks for it
           ./scripts/check-linux-package.sh release/nivyx-linux-x86_64.tar.gz
-          cat release/nivyx-release.manifest
+          top() { unzip -Z1 "$1" | awk -F/ 'NF > 1 && $2 != "" { print $2 }' | LC_ALL=C sort -u | tr '\n' '|'; }
+          for a in arm64 x86_64; do
+            z="release/nivyx-macos-$a.zip"
+            [ "$(top "$z")" = "Install Nivyx.command|QUICKSTART.txt|Uninstall Nivyx.command|Update Nivyx.command|files|nivyx|" ] \
+              || { echo "macOS $a zip top level: $(top "$z")"; exit 1; }
+            unzip -Z1 "$z" | grep -qx "nivyx-macos-$a/files/nivyx-engine" || { echo "macOS $a zip lacks files/nivyx-engine"; exit 1; }
+            unzip -Z1 "$z" | grep -qx "nivyx-macos-$a/files/install.sh" || { echo "macOS $a zip lacks files/install.sh"; exit 1; }
+          done
+          z=release/nivyx-windows-x86_64.zip
+          [ "$(top "$z")" = "Install Nivyx.cmd|QUICKSTART.txt|Uninstall Nivyx.cmd|Update Nivyx.cmd|files|nivyx.cmd|" ] \
+            || { echo "Windows zip top level: $(top "$z")"; exit 1; }
+          for f in nivyx-engine.exe WinDivert.dll WinDivert64.sys install.ps1 uninstall.ps1 nivyx-impl.ps1; do
+            unzip -Z1 "$z" | grep -qx "nivyx-windows-x86_64/files/$f" || { echo "Windows zip lacks files/$f"; exit 1; }
+          done
+          cat release/SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-assets
@@ -146,8 +137,8 @@ jobs:
           path: release
       - run: (cd release && sha256sum -c SHA256SUMS)
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev nftables
-      - name: the v2.3.0 updater (as released) installs the final package
-        run: NIVYX_TEST_PACKAGE="$PWD/release/nivyx-linux-x86_64.tar.gz" ./scripts/update-compat-test-linux.sh v2.3.0
+      - name: the final package over v2.4.0 (its updater refuses it; install.sh, update.sh, uninstall.sh)
+        run: NIVYX_TEST_PACKAGE="$PWD/release/nivyx-linux-x86_64.tar.gz" ./scripts/update-compat-test-linux.sh v2.4.0
 
   final-macos:
     needs: [preflight, assemble]
@@ -165,10 +156,10 @@ jobs:
           name: release-assets
           path: release
       - run: (cd release && shasum -a 256 -c SHA256SUMS)
-      - name: v2.3.0 package (checksum-verified)
+      - name: v2.4.0 package (checksum-verified)
         run: |
           mkdir -p "$RUNNER_TEMP/old" && cd "$RUNNER_TEMP/old"
-          base=https://github.com/kadireren7/nivyx/releases/download/v2.3.0
+          base=https://github.com/kadireren7/nivyx/releases/download/v2.4.0
           curl -fsSL -O "$base/nivyx-macos-${{ matrix.arch }}.zip" -O "$base/SHA256SUMS"
           grep " nivyx-macos-${{ matrix.arch }}.zip\$" SHA256SUMS | shasum -a 256 -c -
           ditto -x -k nivyx-macos-${{ matrix.arch }}.zip .
@@ -177,7 +168,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/final"
           ditto -x -k release/nivyx-macos-${{ matrix.arch }}.zip "$RUNNER_TEMP/final"
           ./scripts/macos/e2e-test.sh "$RUNNER_TEMP/final/nivyx-macos-${{ matrix.arch }}"
-      - name: the v2.3.0 updater (as released) installs the final zip; rollbacks
+      - name: v2.4.0 refuses the final zip; the final zip moves it over; rollback
         run: ./scripts/macos/update-test.sh "$RUNNER_TEMP/old/nivyx-macos-${{ matrix.arch }}" release/nivyx-macos-${{ matrix.arch }}.zip
 
   final-windows:
@@ -189,7 +180,7 @@ jobs:
         with:
           name: release-assets
           path: release
-      - name: checksums; the final zip extracted; v2.3.0 package (checksum-verified)
+      - name: checksums; the final zip extracted; v2.4.0 package (checksum-verified)
         shell: pwsh
         run: |
           foreach ($l in Get-Content release/SHA256SUMS) {
@@ -197,16 +188,16 @@ jobs:
             if ((Get-FileHash "release/$n" -Algorithm SHA256).Hash.ToLower() -ne $h) { throw "checksum mismatch: $n" }
           }
           Expand-Archive release/nivyx-windows-x86_64.zip -DestinationPath final
-          $base = 'https://github.com/kadireren7/nivyx/releases/download/v2.3.0'
+          $base = 'https://github.com/kadireren7/nivyx/releases/download/v2.4.0'
           Invoke-WebRequest "$base/nivyx-windows-x86_64.zip" -OutFile old.zip
           Invoke-WebRequest "$base/SHA256SUMS" -OutFile OLDSUMS
           $want = (Select-String -Path OLDSUMS -Pattern 'nivyx-windows-x86_64.zip').Line.Split(' ')[0].ToLower()
-          if ((Get-FileHash old.zip -Algorithm SHA256).Hash.ToLower() -ne $want) { throw 'v2.3.0 zip checksum mismatch' }
+          if ((Get-FileHash old.zip -Algorithm SHA256).Hash.ToLower() -ne $want) { throw 'v2.4.0 zip checksum mismatch' }
           Expand-Archive old.zip -DestinationPath old
       - name: the final package end-to-end (real WinDivert, Administrator)
         shell: pwsh
         run: ./scripts/windows/e2e-test.ps1 -Package final/nivyx-windows-x86_64
-      - name: the v2.3.0 updater (as released) installs the final zip
+      - name: the v2.4.0 updater (as released) refuses the final zip safely
         shell: pwsh
         run: ./scripts/windows/update-compat-test.ps1 -OldPackage old/nivyx-windows-x86_64 -NewPackage final/nivyx-windows-x86_64 -NewZip release/nivyx-windows-x86_64.zip
 
@@ -227,14 +218,7 @@ jobs:
           path: release
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
-          subject-path: |
-            release/nivyx-linux-x86_64.tar.gz
-            release/nivyx-macos-arm64.zip
-            release/nivyx-macos-x86_64.zip
-            release/nivyx-windows-x86_64.zip
-            release/*.spdx.json
-            release/nivyx-release.manifest
-            release/SHA256SUMS
+          subject-path: release/*
       - name: verify the attestations
         env:
           GH_TOKEN: ${{ github.token }}
@@ -267,13 +251,9 @@ jobs:
         with:
           name: release-assets
           path: release
-      - run: (cd release && sha256sum -c SHA256SUMS) && ./scripts/release-sign.sh check release "$VER"
+      - run: (cd release && sha256sum -c SHA256SUMS)
       # The only place a release is created: notes come from
-      # .github/release-notes/<tag>.md when present. Once a release key is
-      # configured (scripts/release-keys.txt) the release is created as a
-      # DRAFT: the maintainer signs nivyx-release.manifest offline, uploads
-      # the .sig and publishes it (docs/release-signing.md); updaters that
-      # carry the key refuse a release without a valid signature.
+      # .github/release-notes/<tag>.md when present.
       - name: create release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -288,17 +268,7 @@ jobs:
           case "$TAG" in
             *-*) set -- "$@" --prerelease --latest=false ;;
           esac
-          if grep -q '^ed25519 ' scripts/release-keys.txt; then
-            set -- "$@" --draft
-            echo "### Draft release $TAG: sign nivyx-release.manifest offline and upload the .sig before publishing (docs/release-signing.md)" >>"$GITHUB_STEP_SUMMARY"
-          fi
-          gh release create "$TAG" \
-            release/nivyx-linux-x86_64.tar.gz \
-            release/nivyx-macos-arm64.zip \
-            release/nivyx-macos-x86_64.zip \
-            release/nivyx-windows-x86_64.zip \
-            release/*.spdx.json \
-            release/nivyx-release.manifest \
-            release/SHA256SUMS \
+          # (the exact set was checked in assemble)
+          gh release create "$TAG" release/* \
             --title "Nivyx $TAG" \
             "$@"

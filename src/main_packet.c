@@ -445,7 +445,7 @@ static void	print_usage(const char *argv0)
 		"\n"
 		"Options:\n"
 		"  --mode packet        this binary only ever runs packet mode;\n"
-		"                       for the portable proxy see dpi-proxy\n"
+		"                       for the portable proxy see nivyx-engine\n"
 		"  --config PATH        strategy config file (default: "
 		"./strategy.conf,\n"
 		"                       same as DPI_PROXY_STRATEGY_CONF; missing "
@@ -506,7 +506,7 @@ static void	print_capabilities(void)
 #endif
 
 	printf("platform: %s\n", capabilities_platform());
-	printf("proxy_mode: not built into this binary (see dpi-proxy)\n");
+	printf("proxy_mode: not built into this binary (see nivyx-engine)\n");
 	printf("packet_mode: %s\n", built
 		? "built (libnetfilter_queue linked)"
 		: "NOT built — rebuild with `make packet-mode`");
@@ -568,7 +568,7 @@ int	main(int argc, char **argv)
 		}
 		else if (strcmp(argv[i], "--version") == 0)
 		{
-			printf("dpi-proxy-packet %s\n", DPI_PROXY_VERSION);
+			printf("nivyx-packet-engine %s\n", DPI_PROXY_VERSION);
 			return (0);
 		}
 		else if (strcmp(argv[i], "--capabilities") == 0)
@@ -643,7 +643,7 @@ int	main(int argc, char **argv)
 			if (strcmp(argv[i], "packet") != 0)
 			{
 				fprintf(stderr, "this binary only supports --mode packet; "
-					"for the portable SOCKS5 proxy, use dpi-proxy\n");
+					"for the portable SOCKS5 proxy, use nivyx-engine\n");
 				return (1);
 			}
 		}

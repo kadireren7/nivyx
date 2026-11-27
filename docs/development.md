@@ -1,6 +1,6 @@
 # Development
 
-Building, testing, and CI for dpi-proxy. For how the engine works
+Building, testing, and CI for Nivyx. For how the engine works
 internally, see [docs/architecture.md](architecture.md) and
 [docs/transparent-mode.md](transparent-mode.md).
 
@@ -15,14 +15,14 @@ internally, see [docs/architecture.md](architecture.md) and
 
 ## CLI reference
 
-`dpi-proxy` (SOCKS5 proxy, all platforms):
+`nivyx-engine` (SOCKS5 proxy, all platforms):
 
 ```
-dpi-proxy [--listen HOST:PORT] [--log-level error|info]
+nivyx-engine [--listen HOST:PORT] [--log-level error|info]
           [--capabilities] [--version] [--help]
 ```
 
-`dpi-proxy-packet` (Linux packet mode) has its own reference in
+`nivyx-packet-engine` (Linux packet mode) has its own reference in
 [docs/packet-mode.md](packet-mode.md#cli-reference).
 
 Both binaries print an actionable message (not a bare error code) on
@@ -37,7 +37,7 @@ strategy config (with the offending line number), missing
 # macOS — the same, if OpenSSL is found (Homebrew's openssl@3 by
 #         default, or OPENSSL_PREFIX=...); otherwise SOCKS5 only
 make fclean && make
-./dpi-proxy
+./nivyx-engine
 ```
 
 ```sh
@@ -46,7 +46,7 @@ make fclean && make
 export MACOSX_DEPLOYMENT_TARGET=11.0
 ./scripts/macos/build-openssl.sh "$PWD/../openssl-$(uname -m)"
 make fclean && make OPENSSL_PREFIX="$PWD/../openssl-$(uname -m)" OPENSSL_STATIC=1
-./scripts/macos/package.sh dpi-proxy-macos-$(uname -m)   # the test package folder
+./scripts/macos/package.sh nivyx-macos-$(uname -m)   # the package folder
 ```
 
 ```sh
@@ -60,7 +60,7 @@ make packet-mode
 make windows
 ```
 
-`make windows` produces a statically linked `dpi-proxy.exe` that runs
+`make windows` produces a statically linked `nivyx-engine.exe` that runs
 on a plain Windows machine without extra runtime DLLs.
 
 ## Tests
@@ -74,7 +74,7 @@ make sanitize     # same unit tests, forced clean rebuild under ASan+UBSan
 plain `.o` files from a prior `make test` could slip through
 uninstrumented. `make packet-mode` does the same for the reverse
 direction (a prior `make sanitize` leaving instrumented `.o` files that
-would otherwise get linked into `dpi-proxy-packet` unsanitized) — see
+would otherwise get linked into `nivyx-packet-engine` unsanitized) — see
 the comment above the `packet-mode` target in the `Makefile` if you're
 touching either.
 
@@ -105,7 +105,7 @@ the real `nft` success path.
 - `sanitize`: `make sanitize`.
 - `packet-mode-compile`: installs real `libnetfilter-queue-dev` +
   `nftables` via `sudo apt-get`, runs `make packet-mode`, and runs
-  `./dpi-proxy-packet --capabilities` (read-only — does not apply
+  `./nivyx-packet-engine --capabilities` (read-only — does not apply
   nftables rules or bind a live NFQUEUE; GitHub-hosted runners aren't a
   confirmed-reliable place to do that; live verification is done on
   real machines with `scripts/field-test-linux.sh`).
@@ -115,22 +115,23 @@ the real `nft` success path.
 
 ## Release builds
 
-Prebuilt releases (packet mode is Linux-only and needs
-root/capabilities, so it's a build-from-source thing, not a release
-artifact) are published on the
-[releases page](https://github.com/kadireren7/nivyx/releases)
-for each tag: `dpi-proxy-linux-x86_64`, `dpi-proxy-windows-x86_64.zip`,
-and (from v1.2.0-rc1) `dpi-proxy-macos-arm64.zip` /
-`dpi-proxy-macos-x86_64.zip`, alongside a `SHA256SUMS` file. Every
-package is built only after it passed its platform's end-to-end test:
+A release (from v2.4.1) is exactly five files: `nivyx-windows-x86_64.zip`,
+`nivyx-macos-arm64.zip`, `nivyx-macos-x86_64.zip`,
+`nivyx-linux-x86_64.tar.gz` and `SHA256SUMS`. Each package has the same
+top level — the Install / Update / Uninstall launchers, the `nivyx`
+command, `QUICKSTART.txt` — and a `files/` folder with the engine and
+the scripts the launchers run (`scripts/*/package.sh`,
+`scripts/package-linux.sh`). Every package is built only after it passed
+its platform's end-to-end test (packet mode is Linux-only and built
+from source, not released).
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing
 ```
 
-`dpi-proxy --version` reports the version baked in at build time (from
-the repo's `VERSION` file) — it will match the release tag for any
-official build.
+`nivyx-engine --version` reports the version baked in at build time
+(from the repo's `VERSION` file) — it will match the release tag for any
+official build; `nivyx update` relies on that.
 
 ### Release workflow and dry run
 
@@ -140,19 +141,17 @@ official build.
 - **dry run**: `Actions → release → Run workflow` (or `gh workflow run
   release.yml --ref <branch>`); nothing is published.
 
-Jobs: `preflight` (version, mode, release keys in sync) → `ci` (the whole
-`build.yml` matrix as a reusable workflow; its artifacts are the release
-packages) → `assemble` (the exact release set: packages, SBOM,
-`nivyx-release.manifest`, `SHA256SUMS`; consistency and layout checks;
-stored as the `release-assets` artifact) → `final-linux`, `final-macos`
-(arm64, Intel), `final-windows` (the v2.3.0 updater installs the final
-files; macOS and Windows end-to-end from the final archives) and
-`provenance` (attest and verify every file) → `publish`. Only `publish`
-can write repository contents; it runs only for a pushed `v*` tag (job
-condition and a guard step). With a release key in
-`scripts/release-keys.txt` the release is created as a draft for offline
-signing (docs/release-signing.md). The dry run's `release-assets`
-artifact holds exactly the files a release would publish.
+Jobs: `preflight` (version and mode) → `ci` (the whole `build.yml`
+matrix as a reusable workflow; its artifacts are the release packages) →
+`assemble` (the exact release set, consistency and package layout
+checks; stored as the `release-assets` artifact) → `final-linux`,
+`final-macos` (arm64, Intel), `final-windows` (the final files installed
+over v2.4.0, whose own updater must refuse them; macOS and Windows
+end-to-end from the final archives) and `provenance` (attest and verify
+every file) → `publish`. Only `publish` can write repository contents;
+it runs only for a pushed `v*` tag (job condition and a guard step). The
+dry run's `release-assets` artifact holds exactly the files a release
+would publish.
 
 ## Optional: TLS ClientHello splitting in the SOCKS5 proxy
 
@@ -161,7 +160,7 @@ Separate from packet mode's `SPLIT` strategy. Set
 split the first TLS ClientHello across two TCP segments, mid-hostname:
 
 ```sh
-DPI_PROXY_SPLIT_TLS=1 ./dpi-proxy
+DPI_PROXY_SPLIT_TLS=1 ./nivyx-engine
 ```
 
 **It's off by default because testing showed it reliably breaks the
@@ -173,44 +172,25 @@ otherwise it will make things worse, not better.
 
 ## Internal identifiers
 
-`nivyx` is the only public command. **Linux** moved to the nivyx names in
-v2.3: service `nivyx` (and `nivyx-packet`), engine
-`/usr/local/bin/nivyx-engine` (`nivyx-packet-engine`), settings and state
-in `/etc/nivyx`, `/var/lib/nivyx`, `/run/nivyx`. Installs from earlier
-releases are moved automatically (installer, `nivyx repair` or
-`nivyx update`), keeping settings; until then the CLI recognises both
-layouts, which is also what lets an older release's own `nivyx update`
-install a newer package (the release archive keeps the `dpi-proxy`
-file name inside for that reason). Windows and macOS, and a few
-identifiers on every platform, keep their earlier names on purpose,
-because renaming them would need a migration of live services, kernel
-objects and user data for no user benefit:
+`nivyx` is the only public command, and since v2.4.1 every platform uses
+the nivyx names:
 
-| Identifier | Where | Why it stays |
-|---|---|---|
-| `dpi-proxy-transparent`, `dpi-proxy-packet` | Linux unit names before v2.3 | moved to `nivyx` / `nivyx-packet` by the installer, `repair` and `update`; still recognised by the CLI until moved |
-| `io.github.kadireren7.dpi-proxy` | launchd label, plist name | same; also a reverse-DNS identity |
-| `com.apple/dpi-proxy`, `dpi_quic4/6`, ... | PF anchor and tables | cleaned up by name by older uninstallers |
-| `dpi_proxy_tp`, `dpi_proxy` | nftables tables | same; `repair`/uninstall delete them by name |
-| `dpi-proxy` | Windows service name, `%ProgramFiles%\dpi-proxy`, `%ProgramData%\dpi-proxy`, firewall rule | same; upgrade keeps config and learned state in place |
-| `/usr/local/etc/dpi-proxy`, `/var/run/dpi-proxy` (macOS); `/etc/dpi-proxy`, `/var/lib/dpi-proxy`, `/run/dpi-proxy` (Linux before v2.3) | config/state/run paths | users' manual rules and learned decisions live there; Linux copies them to `/etc/nivyx` etc. |
-| `dpi-proxy`, `dpi-proxy.exe` | the engine executable | see below |
-| `DPI_PROXY_*` | environment overrides | used by units and tests |
-| `dpictl`, `dpi-proxy-ctl` | **only** in the installers' upgrade cleanup, the uninstallers, and the upgrade tests | to remove v2.1's command files |
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| service | `nivyx` (`nivyx-packet`) | launchd `io.github.kadireren7.nivyx` | `nivyx` |
+| engine | `/usr/local/bin/nivyx-engine` | `/usr/local/bin/nivyx-engine` | `%ProgramFiles%\Nivyx\nivyx-engine.exe` |
+| settings, state | `/etc/nivyx`, `/var/lib/nivyx`, `/run/nivyx` | `/usr/local/etc/nivyx`, `/usr/local/var/nivyx`, `/var/run/nivyx` | `%ProgramData%\Nivyx` |
+| interception | nftables `dpi_proxy_tp` | PF anchor `com.apple/nivyx` | WinDivert, firewall rule `nivyx` |
 
-### Engine binary name
-
-The engine is built as `dpi-proxy` on every platform (installed to
-`/usr/local/bin/nivyx-engine` on Linux since v2.3; still
-`/usr/local/bin/dpi-proxy` on macOS and `%ProgramFiles%\dpi-proxy` on
-Windows). Moving it to a libexec directory as
-`nivyx-engine` was evaluated and not done: the service definitions on all
-three platforms, the uninstallers of earlier releases, PF/WinDivert
-process matching (`pgrep -f '^/usr/local/bin/dpi-proxy'`), the firewall
-rule's program path and the update/rollback mechanism all reference that
-path, and a mistake would leave a machine with a dead service. Users
-never need to run it; `nivyx` is the interface. It can move in a later
-release together with a unit migration that has its own upgrade test.
+Installs with the earlier `dpi-proxy` names (Linux before v2.3, macOS and
+Windows before v2.4.1) are moved by the installer, keeping settings and
+learned state; the old service is started again if the new one fails
+its health check. The `dpi-proxy` names remain only in that migration
+code, in the uninstallers (to clean up leftovers) and in the upgrade
+tests. Unchanged on purpose: the nftables table names (`dpi_proxy_tp`,
+`dpi_proxy`, deleted by name by every uninstaller) and the `DPI_PROXY_*`
+environment overrides (used by the units and tests); `dpictl` /
+`dpi-proxy-ctl` appear only in v2.1 cleanup code.
 
 ## CLI tests
 
@@ -224,14 +204,12 @@ release together with a unit migration that has its own upgrade test.
   breakage), and `update` against a local mock release server
   (`NIVYX_RELEASE_API`): wrong checksum, a release that cannot start
   (rolled back), and a good release.
-- `scripts/release-verify-test.sh` — the engine's release-signature check
-  (temporary keys); `scripts/update-signature-test-linux.sh`,
-  `scripts/windows/update-signature-test.ps1` and the signature part of
-  `scripts/macos/update-test.sh` — the updaters against the 8 mock
-  releases of `scripts/signed-release-cases.sh` (docs/release-signing.md).
-- `scripts/macos/update-test.sh` — the v2.2.2/v2.3.0 macOS updaters (as
-  released) install the candidate; both they and the candidate updater
-  roll back a release that cannot start; settings and learned state kept.
+- `scripts/macos/update-test.sh`, `scripts/windows/update-compat-test.ps1`,
+  `scripts/update-compat-test-linux.sh` — an older release's own updater
+  (as released) refuses the new package layout and changes nothing; the
+  candidate's installer then moves the install over (settings and learned
+  state kept); on macOS the candidate's updater also rolls back a release
+  that cannot start.
 - `scripts/upgrade-test-linux.sh`, `scripts/macos/upgrade-test.sh`,
-  `scripts/windows/upgrade-test.ps1` — a real v2.1.0 install (tagged
+  `scripts/windows/upgrade-test.ps1` — a real older install (tagged
   source / the published ZIP, checksum-verified) upgraded in place.

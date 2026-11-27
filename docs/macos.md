@@ -2,7 +2,7 @@
 
 macOS transparent mode works the same way as on Linux: the built-in
 macOS packet filter (PF) sends this Mac's HTTPS and DNS to the local
-`dpi-proxy` service. It passes the full automated end-to-end test on
+`nivyx` service. It passes the full automated end-to-end test on
 real macOS GitHub runners (macOS 15 and 26 on Apple silicon,
 macOS 15 on Intel; real PF and launchd, root), and has been field-
 tested on a physical Mac against real ISP-level DPI in Turkey:
@@ -23,16 +23,23 @@ and networks. Field reports are welcome.
    unidentified developer", right-click (or Control-click) it and
    choose *Open* once instead of double-clicking.
    (Advanced/manual: `cd` into the extracted folder and run
-   `sudo ./install.sh`.)
+   `sudo sh files/install.sh`.)
 3. Check it: `nivyx status` in any Terminal window — you should see
    `Service: Running` and `Protection: Active`.
 4. Use Safari, Chrome, Firefox, Discord, … normally. No proxy
    settings, no manual DNS changes, no per-app configuration.
 
-The ZIP contains everything (`dpi-proxy`, `nivyx`, `Install Nivyx.command`,
-`Uninstall Nivyx.command`, `install.sh`, `uninstall.sh`, the launchd
-job, the man page and zsh completion, LICENSE, `MACOS-QUICKSTART.txt`); no Xcode, Homebrew, Git or
-Python is needed. Before testing, quit SpoofDPI, ByeDPI, zapret and
+The ZIP contains `Install Nivyx.command`, `Update Nivyx.command`,
+`Uninstall Nivyx.command`, the `nivyx` command, `QUICKSTART.txt`, and a
+`files` folder with what they use (the engine `nivyx-engine`, the
+install and uninstall scripts, the launchd job and the license). No
+Xcode, Homebrew, Git or Python is needed.
+
+An installation of v2.4.0 or earlier (`dpi-proxy` names) is moved over
+by `Install Nivyx.command` or `Update Nivyx.command`, keeping settings
+and learned state; if the new version fails its health check the old one
+is started again. Its own `nivyx update` cannot install v2.4.1 (it
+refuses the new layout and changes nothing). Before testing, quit SpoofDPI, ByeDPI, zapret and
 VPN apps that filter traffic (`nivyx doctor` checks for the ones it
 can detect).
 
@@ -53,21 +60,21 @@ sudo nivyx restart
 See [cli.md](cli.md) for the full
 command reference (shared across platforms).
 
-Files: `/usr/local/bin/dpi-proxy`, `/usr/local/bin/nivyx`,
-`/Library/LaunchDaemons/io.github.kadireren7.dpi-proxy.plist`,
-`/usr/local/etc/dpi-proxy/strategy.conf`, log `/var/log/dpi-proxy.log`.
+Files: `/usr/local/bin/nivyx-engine`, `/usr/local/bin/nivyx`,
+`/Library/LaunchDaemons/io.github.kadireren7.nivyx.plist`,
+`/usr/local/etc/nivyx/strategy.conf`, log `/var/log/nivyx.log`.
 
 ## Uninstall
 
 Double-click **`Uninstall Nivyx.command`** in the extracted folder, or
-manually: `sudo ./uninstall.sh`. Removes the service, the programs and
+manually: `sudo sh files/uninstall.sh`. Removes the service, the programs and
 Nivyx's PF rules, and releases its PF reference; PF, `/etc/pf.conf` and
 every other rule are left exactly as they were. Your settings
-(`/usr/local/etc/dpi-proxy`), learned decisions
-(`/usr/local/var/dpi-proxy`) and log are **kept**, so a reinstall picks
-them up; `sudo ./uninstall.sh --purge` removes them too.
+(`/usr/local/etc/nivyx`), learned decisions
+(`/usr/local/var/nivyx`) and log are **kept**, so a reinstall picks
+them up; `sudo sh files/uninstall.sh --purge` removes them too.
 
-Both `.command` launchers and both scripts exit with the real result
+The `.command` launchers and the scripts exit with the real result
 (0 = done). A reinstall or upgrade that fails its health check puts the
 previous installation (programs, plist, launchd job) back and starts it
 (exit 4); a fresh install that fails is removed again. If even that
@@ -79,12 +86,12 @@ ID certificate behind this project). macOS may ask you to confirm
 opening `Install Nivyx.command` (right click → Open). The installer
 then copies the two programs it installs without the download's
 quarantine flag; it no longer strips that flag from the whole extracted
-folder. Opening `dpi-proxy` itself from Finder only starts a plain
-SOCKS5 proxy and says so: use the `.command` launchers.
+folder. Opening `files/nivyx-engine` itself from Finder only starts a
+plain SOCKS5 proxy and says so: use the `.command` launchers.
 
 ## How it touches the system
 
-All rules live in dpi-proxy's own PF anchor (`com.apple/dpi-proxy`);
+All rules live in Nivyx's own PF anchor (`com.apple/nivyx`);
 `/etc/pf.conf` is never edited and other PF rules are never touched.
 If the service stops, crashes or hangs, a watchdog process removes the
 rules (immediately, or within 30 seconds for a hang), so the internet
@@ -109,6 +116,6 @@ the engine itself works.
 
 ## SOCKS5 mode
 
-`dpi-proxy` run without arguments is still a plain local SOCKS5 proxy
-on `127.0.0.1:1080` (`DPI_PROXY_SPLIT_TLS=record ./dpi-proxy` for the
+`nivyx-engine` run without arguments is still a plain local SOCKS5 proxy
+on `127.0.0.1:1080` (`DPI_PROXY_SPLIT_TLS=record ./nivyx-engine` for the
 bypass) — on every platform, not just macOS.

@@ -38,12 +38,12 @@ void	tp_request_stop(void);
 
 # ifdef _WIN32
 /* svc_windows.c: runs the server under the service control manager
- * (service "dpi-proxy"); -1 if not started by it. */
+ * (service "nivyx"); -1 if not started by it. */
 int		tp_windows_service_run(const t_tp_options *opt);
 # endif
 
 # ifdef __APPLE__
-/* platform_macos.c: `dpi-proxy --pf-watchdog LOGFILE`, spawned by the
+/* platform_macos.c: `nivyx-engine --pf-watchdog LOGFILE`, spawned by the
  * daemon itself: removes the PF rules the moment the daemon dies. */
 int		tp_pf_watchdog_main(const char *log_file);
 # endif

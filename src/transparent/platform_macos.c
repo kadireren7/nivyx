@@ -57,7 +57,7 @@ extern char	**environ;
 
 #define PFCTL "/sbin/pfctl"
 #define PF_DEV "/dev/pf"
-#define TOKEN_FILE_DEFAULT "/var/run/dpi-proxy/pf.token"
+#define TOKEN_FILE_DEFAULT "/var/run/nivyx/pf.token"
 #define PFCTL_OUT_MAX 16384
 #define RULES_MAX 8192
 
@@ -1241,7 +1241,7 @@ void	tpp_status_extra(char *out, size_t out_size)
 		g_seen_hooks ? "ok" : "MISSING", wd);
 }
 
-/* ---- the watchdog process: `dpi-proxy --pf-watchdog LOGFILE` ---- */
+/* ---- the watchdog process: `nivyx-engine --pf-watchdog LOGFILE` ---- */
 
 static volatile sig_atomic_t	g_wd_term;
 static const char				*g_wd_log;
@@ -1361,21 +1361,21 @@ int	tp_pf_watchdog_main(const char *log_file)
 		if (g_wd_term)
 		{
 			wd_cleanup(token);
-			wd_log("stopped by a signal; dpi-proxy PF rules removed");
+			wd_log("stopped by a signal; Nivyx PF rules removed");
 			return (0);
 		}
 		if (!flushed && awake_ms() - last > TP_ALIVE_TIMEOUT_S * 1000)
 		{
 			anchor_flush();
 			flushed = 1;
-			wd_log("no heartbeat from dpi-proxy for 30 s (hung?): PF rules "
+			wd_log("no heartbeat from nivyx-engine for 30 s (hung?): PF rules "
 				"removed, traffic goes out directly (fail-open)");
 		}
 	}
 	if (!clean)
 	{
 		wd_cleanup(token);
-		wd_log("dpi-proxy exited unexpectedly: PF rules removed and PF "
+		wd_log("nivyx-engine exited unexpectedly: PF rules removed and PF "
 			"reference released, traffic goes out directly (fail-open)");
 	}
 	return (0);

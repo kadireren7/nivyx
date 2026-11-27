@@ -392,9 +392,9 @@ mock="$(mktemp -d)"; port=18765
 current="$(nivyx version | awk '{print $2}')"
 mk_release() {	# $1 = engine file, $2 = SHA256SUMS mode (good|bad), $3 = version tag
 	rm -rf "$mock/pkg" "$mock"/*.tar.gz "$mock"/SHA256SUMS "$mock"/latest.json
-	mkdir -p "$mock/pkg/nivyx-linux-x86_64"
-	cp "$1" "$mock/pkg/nivyx-linux-x86_64/dpi-proxy"
-	cp "$ROOT/scripts/nivyx" "$mock/pkg/nivyx-linux-x86_64/nivyx"
+	# the real package layout, with the engine under test
+	"$ROOT/scripts/package-linux.sh" "$mock/pkg" >/dev/null || die "package-linux.sh failed"
+	cp "$1" "$mock/pkg/nivyx-linux-x86_64/files/nivyx-engine"
 	tar -C "$mock/pkg" -czf "$mock/nivyx-linux-x86_64.tar.gz" nivyx-linux-x86_64
 	if [ "$2" = good ]; then
 		(cd "$mock" && sha256sum nivyx-linux-x86_64.tar.gz > SHA256SUMS)
@@ -408,13 +408,13 @@ mk_release() {	# $1 = engine file, $2 = SHA256SUMS mode (good|bad), $3 = version
 JSON
 }
 # an engine that claims 99.0.0 and works: the real source, rebuilt with the version overridden
-cp "$ROOT/dpi-proxy" "$mock/engine-current"
+cp "$ROOT/nivyx-engine" "$mock/engine-current"
 make -C "$ROOT" clean >/dev/null && make -C "$ROOT" VERSION=99.0.0 >/dev/null || die "could not build the 99.0.0 test engine"
-cp "$ROOT/dpi-proxy" "$mock/engine-good"
+cp "$ROOT/nivyx-engine" "$mock/engine-good"
 cat > "$mock/engine-broken" <<'BROKEN'
 #!/bin/sh
 case "$1" in
---version) echo "dpi-proxy 99.0.0" ;;
+--version) echo "nivyx-engine 99.0.0" ;;
 --capabilities) echo "transparent_mode: supported" ;;
 *) exit 1 ;;
 esac
