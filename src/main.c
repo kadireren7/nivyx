@@ -1,7 +1,4 @@
 #include "capabilities.h"
-#ifdef HAVE_TRANSPARENT
-# include "release_verify.h"
-#endif
 #include "common.h"
 #include "platform.h"
 #include "socks.h"
@@ -27,7 +24,7 @@
 
 #ifdef _WIN32
 /*
- * dpi-proxy.exe is Nivyx's internal engine: the installed service runs
+ * nivyx-engine.exe is Nivyx's internal engine: the installed service runs
  * it with --service. Double-clicked in Explorer (no arguments, a console
  * window created just for it), the default SOCKS5 mode would leave a
  * window with one line in it and no visible effect. In that one case
@@ -52,13 +49,13 @@ static int	launched_from_explorer(void)
 
 static int	explain_engine_and_wait(void)
 {
-	printf("Nivyx %s - internal engine (dpi-proxy.exe)\n"
+	printf("Nivyx %s - internal engine (nivyx-engine.exe)\n"
 		"\n"
 		"This file is not meant to be opened directly. It is the engine\n"
 		"that the Nivyx Windows service runs in the background.\n"
 		"\n"
 		"  To install Nivyx:  double-click \"Install Nivyx.cmd\"\n"
-		"                     in the folder you extracted from the ZIP.\n"
+		"                     in the folder extracted from the ZIP.\n"
 		"  Already installed: open PowerShell and run  nivyx status\n"
 		"  To remove it:      double-click \"Uninstall Nivyx.cmd\".\n"
 		"\n"
@@ -89,7 +86,7 @@ static void	print_usage(const char *argv0)
 		"                       automatically (normally run by the\n"
 		"                       installed service)\n"
 		"                       — see docs/transparent-mode.md\n"
-		"  --service            Windows: run as the \"dpi-proxy\" service\n"
+		"  --service            Windows: run as the \"nivyx\" service\n"
 		"  --port PORT          transparent listener port (default %d)\n"
 		"  --debug              transparent mode: log every connection\n"
 		"  --log-level LEVEL    error|info (default: info) — \"error\"\n"
@@ -119,7 +116,7 @@ static void	print_capabilities(void)
 	printf("transparent_mode: not built into this binary\n");
 #endif
 	printf("packet_mode: not built into this binary "
-		"(see dpi-proxy-packet, Linux only)\n");
+		"(see nivyx-packet-engine, Linux only)\n");
 	printf("ipv4: yes\n");
 	printf("ipv6: yes (SOCKS5 ATYP 0x04)\n");
 	printf("tls_split: yes (DPI_PROXY_SPLIT_TLS=1 or =record in proxy mode; "
@@ -205,7 +202,7 @@ int	main(int argc, char **argv)
 		}
 		else if (strcmp(argv[i], "--version") == 0)
 		{
-			printf("dpi-proxy %s\n", DPI_PROXY_VERSION);
+			printf("nivyx-engine %s\n", DPI_PROXY_VERSION);
 			return (0);
 		}
 		else if (strcmp(argv[i], "--capabilities") == 0)
@@ -213,11 +210,6 @@ int	main(int argc, char **argv)
 			print_capabilities();
 			return (0);
 		}
-#ifdef HAVE_TRANSPARENT
-		/* the updaters' signed-manifest check (docs/release-signing.md) */
-		else if (strcmp(argv[i], "--verify-release") == 0 && i + 3 < argc)
-			return (release_verify_main(argv[i + 1], argv[i + 2], argv[i + 3]));
-#endif
 		else if (strcmp(argv[i], "--listen") == 0 && i + 1 < argc)
 		{
 			i++;
@@ -237,7 +229,7 @@ int	main(int argc, char **argv)
 			else if (strcmp(argv[i], "proxy") != 0)
 			{
 				fprintf(stderr, "unknown --mode \"%s\" (proxy or "
-					"transparent; for packet mode see dpi-proxy-packet)\n",
+					"transparent; for packet mode see nivyx-packet-engine)\n",
 					argv[i]);
 				return (1);
 			}
@@ -328,7 +320,7 @@ int	main(int argc, char **argv)
 #endif
 	}
 
-	printf("dpi-proxy — general-purpose SOCKS5 proxy\n");
+	printf("nivyx-engine — general-purpose SOCKS5 proxy\n");
 #ifdef _WIN32
 	if (argc == 1)
 		fprintf(stderr, "note: plain SOCKS5 proxy only; this does not "
@@ -348,7 +340,7 @@ int	main(int argc, char **argv)
 	rc = run_socks_server(host, port);
 	if (rc < 0 && host != NULL)
 		fprintf(stderr, "note: could not bind %s:%d — if the address is "
-			"already in use, another process (or another dpi-proxy) is "
+			"already in use, another process (or another nivyx-engine) is "
 			"probably listening there already\n", host, port);
 
 	platform_cleanup();

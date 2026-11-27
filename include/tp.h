@@ -288,7 +288,7 @@ size_t		tp_nft_quic_block(char *out, size_t out_size, int family,
  * com.apple (its rdr-anchor and anchor "com.apple/..." wildcards), so
  * rules loaded here take effect without touching /etc/pf.conf or the
  * main ruleset. Nothing else ever loads into this exact anchor. */
-# define TP_PF_ANCHOR "com.apple/dpi-proxy"
+# define TP_PF_ANCHOR "com.apple/nivyx"
 /* Every socket the daemon opens itself binds to a local port in this
  * range, which the rules never intercept (macOS has no SO_MARK). Below
  * macOS's ephemeral range (49152-65535), so no other program's

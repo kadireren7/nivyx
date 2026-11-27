@@ -1,0 +1,12 @@
+Nivyx for Windows 10/11 (64-bit)
+
+Install:    double-click "Install Nivyx.cmd" and choose Yes.
+            Websites and apps then work normally; nothing else to set up.
+Update:     double-click "Update Nivyx.cmd".
+Uninstall:  double-click "Uninstall Nivyx.cmd" (your settings are kept).
+
+Check it:   open a new terminal and run  nivyx status
+Problems:   nivyx doctor
+
+Extract the whole ZIP first; do not run the files from inside it.
+More: https://github.com/kadireren7/nivyx

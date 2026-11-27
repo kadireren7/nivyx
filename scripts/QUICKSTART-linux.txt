@@ -1,0 +1,13 @@
+Nivyx for Linux (x86_64, systemd + nftables, glibc 2.35+ and OpenSSL 3:
+Debian 12, Ubuntu 22.04 and newer)
+
+Install:    sudo ./install.sh
+            Websites and apps then work normally; nothing else to set up.
+Update:     sudo ./update.sh       (or: sudo nivyx update)
+Uninstall:  sudo ./uninstall.sh    (your settings are kept)
+
+Check it:   nivyx status
+Problems:   nivyx doctor
+
+Other systems (Fedora, Arch, arm64, ...): install from source,
+see https://github.com/kadireren7/nivyx

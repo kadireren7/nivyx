@@ -56,30 +56,31 @@ wasn't attempted this round — see "Not pursued this round" below.
 
 ## Package size breakdown
 
-**Linux**: no separate package — `dpi-proxy` (113 KB stripped) is
-installed directly by `scripts/install.sh`; `nivyx`
-(a shell script, a few KB) and the systemd unit files are the only
-other installed files.
+(Sizes from v2.4.0; v2.4.1 has the same engine and fewer files.)
 
-**Windows ZIP** (`dpi-proxy-windows-x86_64.zip`):
+**Linux** (`nivyx-linux-x86_64.tar.gz`): `files/nivyx-engine` (~113 KB
+stripped, dynamic OpenSSL 3), the systemd unit, the license, and the
+shell scripts `install.sh`, `update.sh`, `uninstall.sh` and `nivyx`.
+
+**Windows ZIP** (`nivyx-windows-x86_64.zip`):
 
 | Component | Size |
 |---|---|
-| `dpi-proxy.exe` (our executable, stripped) | 6,018,560 B |
-| `WinDivert.dll` + `WinDivert64.sys` (third-party driver, unmodified) | ~142 KB |
-| Scripts (`install.ps1`, `uninstall.ps1`, `Install Nivyx.cmd`, `Uninstall Nivyx.cmd`, `nivyx.cmd`, `nivyx-impl.ps1`) | ~26 KB |
-| `LICENSE.txt`, `WinDivert-LICENSE.txt`, `WINDOWS-QUICKSTART.txt` | ~3 KB |
+| `files\nivyx-engine.exe` (our executable, stripped) | 6,018,560 B |
+| `files\WinDivert.dll` + `WinDivert64.sys` (third-party driver, unmodified) | ~142 KB |
+| Launchers and scripts (`Install`/`Update`/`Uninstall Nivyx.cmd`, `nivyx.cmd`, `files\*.ps1`) | ~80 KB |
+| `QUICKSTART.txt`, `files\LICENSE.txt`, `files\WinDivert-LICENSE.txt` | ~63 KB |
 
-Our own executable is over 97% of the package; WinDivert (required for
+Our own executable is over 95% of the package; WinDivert (required for
 transparent mode, never removed) is a small fraction of it.
 
-**macOS ZIP** (`dpi-proxy-macos-<arch>.zip`):
+**macOS ZIP** (`nivyx-macos-<arch>.zip`):
 
 | Component | Size (arm64) |
 |---|---|
-| `dpi-proxy` (our executable, stripped, static OpenSSL) | 4,296,184 B |
-| Scripts (`install.sh`, `uninstall.sh`, `Install Nivyx.command`, `Uninstall Nivyx.command`, `nivyx`) | ~29 KB |
-| `io.github.kadireren7.dpi-proxy.plist`, `LICENSE`, `MACOS-QUICKSTART.txt` | ~5 KB |
+| `files/nivyx-engine` (our executable, stripped, static OpenSSL) | 4,296,184 B |
+| Launchers and scripts (`Install`/`Update`/`Uninstall Nivyx.command`, `nivyx`, `files/install.sh`, `files/uninstall.sh`) | ~80 KB |
+| `QUICKSTART.txt`, `files/io.github.kadireren7.nivyx.plist`, `files/LICENSE` | ~3 KB |
 
 No separate driver/runtime component on macOS (PF is built into the
 OS); our own executable is essentially the whole package.

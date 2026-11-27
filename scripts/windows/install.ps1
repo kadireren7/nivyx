@@ -1,41 +1,56 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Installs Nivyx transparent mode on Windows as the "dpi-proxy"
-  service: after this, HTTPS and DNS from every application go through
-  the automatic DPI bypass, with no proxy or DNS settings anywhere.
+  Installs Nivyx on Windows as the "nivyx" service: HTTPS and DNS from
+  every application go through the automatic DPI bypass, with no proxy
+  or DNS settings anywhere.
 
 .DESCRIPTION
-  Run from the unpacked release folder, in an elevated PowerShell:
-      powershell -ExecutionPolicy Bypass -File .\install.ps1
+  Normally started by "Install Nivyx.cmd" (or by `nivyx update`). Manual
+  use, in an elevated PowerShell, from the extracted package folder:
+      powershell -ExecutionPolicy Bypass -File .\files\install.ps1
 
-  Installs (and scripts\windows\uninstall.ps1 removes exactly that):
-    %ProgramFiles%\dpi-proxy\   dpi-proxy.exe, WinDivert.dll,
-                                WinDivert64.sys, WinDivert-LICENSE.txt,
-                                nivyx.cmd, nivyx-impl.ps1, nivyx-completion.ps1,
-                                uninstall.ps1
-    %ProgramData%\dpi-proxy\    strategy.conf (kept on reinstall),
-                                learned decisions, status, log
-    service "dpi-proxy"         automatic start, restart on failure
-    firewall rule "dpi-proxy"   inbound allow for dpi-proxy.exe only
-    machine PATH                + %ProgramFiles%\dpi-proxy
+  Installs (uninstall.ps1 removes exactly that):
+    %ProgramFiles%\Nivyx\   nivyx-engine.exe, WinDivert.dll, WinDivert64.sys,
+                            nivyx.cmd, nivyx-impl.ps1, uninstall.ps1,
+                            Uninstall Nivyx.cmd, licenses
+    %ProgramData%\Nivyx\    strategy.conf (kept on reinstall), learned
+                            decisions, status, log
+    service "nivyx"         automatic start, restart on failure
+    firewall rule "nivyx"   inbound allow for nivyx-engine.exe only
+    machine PATH            + %ProgramFiles%\Nivyx
 
-  WinDivert (https://reqrypt.org/windivert.html) is a third-party,
-  signed packet-capture driver (LGPLv3/GPLv2) that dpi-proxy uses to
-  redirect this machine's own outgoing HTTPS/DNS to itself. Windows
-  loads it when the service starts. Some antivirus products flag it
-  as "riskware" because DPI-bypass tools use it; it is the unmodified
-  official build (see WinDivert-LICENSE.txt).
+  An installation from v2.4.0 or earlier (service "dpi-proxy",
+  %ProgramFiles%\dpi-proxy) is moved over: its settings and learned state
+  are kept, and if the new install fails the old one is started again.
+
+  WinDivert (https://reqrypt.org/windivert.html) is a third-party, signed
+  packet-capture driver (LGPLv3/GPLv2) that redirects this machine's own
+  outgoing HTTPS/DNS to the local service; it is the unmodified official
+  build (see WinDivert-LICENSE.txt).
+
+  Exit codes: 0 installed, 1 not elevated / busy, 2 files missing or
+  cannot back up, 4 failed and undone, 5 failed and the previous version
+  could not be started again.
 #>
 [CmdletBinding()]
 param()
 
 $ErrorActionPreference = 'Stop'
-$Service   = 'dpi-proxy'
-$InstDir   = Join-Path $env:ProgramFiles 'dpi-proxy'
-$DataDir   = Join-Path $env:ProgramData 'dpi-proxy'
+$Service    = 'nivyx'
+$InstDir    = Join-Path $env:ProgramFiles 'Nivyx'
+$DataDir    = Join-Path $env:ProgramData 'Nivyx'
 $StatusFile = Join-Path $DataDir 'transparent.status'
-$Src       = $PSScriptRoot
+$EngineName = 'nivyx-engine.exe'
+# v2.4.0 and earlier
+$OldService = 'dpi-proxy'
+$OldInstDir = Join-Path $env:ProgramFiles 'dpi-proxy'
+$OldDataDir = Join-Path $env:ProgramData 'dpi-proxy'
+$OldExe     = Join-Path $OldInstDir 'dpi-proxy.exe'
+$Src        = $PSScriptRoot
+# started by `nivyx update`: it holds the admin lock, and nivyx.cmd is
+# being read by cmd.exe right now
+$FromUpdate = ($env:NIVYX_FROM_UPDATE -eq '1')
 
 function Log($m) { Write-Host "[install] $m" }
 function Fail($m) { Write-Host "[install] ERROR: $m" -ForegroundColor Red }
@@ -47,9 +62,8 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit 1
 }
 
-# One install/update/repair/uninstall at a time (install.ps1, uninstall.ps1,
-# nivyx update and repair share it): a machine-wide named mutex. Windows
-# releases it when its holder exits, also when the holder crashes.
+# One install/update/repair/uninstall at a time: a machine-wide named
+# mutex, released by Windows when its holder exits or crashes.
 function Enter-AdminLock([string]$who) {
     $script:AdminLock = New-Object System.Threading.Mutex($false, 'Global\NivyxAdminLock')
     $got = $false
@@ -59,20 +73,27 @@ function Enter-AdminLock([string]$who) {
         exit 1
     }
 }
-Enter-AdminLock '[install] ERROR: '
+if (-not $FromUpdate) { Enter-AdminLock '[install] ERROR: ' }
 
-# Files come from the release folder (next to this script) or, in a
-# source checkout, from the repository root.
-$need = 'dpi-proxy.exe', 'WinDivert.dll', 'WinDivert64.sys'
+# Package: this script is in files\ with the engine; the launchers are one
+# folder up. Source checkout: engine and WinDivert at the repository root,
+# scripts in scripts\windows.
 $from = $Src
-if (-not (Test-Path (Join-Path $from 'dpi-proxy.exe'))) {
-    $from = Resolve-Path (Join-Path $Src '..\..')
-}
-foreach ($f in $need) {
-    if (-not (Test-Path (Join-Path $from $f))) {
-        Fail "missing $f (looked in $Src and $from)"
-        exit 2
+if (-not (Test-Path (Join-Path $from $EngineName))) { $from = (Resolve-Path (Join-Path $Src '..\..')).Path }
+function Find-Script([string]$name) {
+    foreach ($d in $Src, (Join-Path $Src '..'), (Join-Path $from 'scripts\windows')) {
+        $p = Join-Path $d $name
+        if (Test-Path $p) { return (Resolve-Path $p).Path }
     }
+    return $null
+}
+$binaries = $EngineName, 'WinDivert.dll', 'WinDivert64.sys'
+$scripts = 'nivyx-impl.ps1', 'nivyx.cmd', 'uninstall.ps1', 'Uninstall Nivyx.cmd'
+foreach ($f in $binaries) {
+    if (-not (Test-Path (Join-Path $from $f))) { Fail "missing $f (looked in $from); extract the whole ZIP again"; exit 2 }
+}
+foreach ($f in $scripts) {
+    if (-not (Find-Script $f)) { Fail "missing $f; extract the whole ZIP again"; exit 2 }
 }
 
 Log '[1/6] Third-party component notice'
@@ -85,7 +106,7 @@ Write-Host '  decrypt anything and does not send traffic to any remote server.'
 # version fails, the previous one is put back and started again.
 $hadService = [bool](Get-Service $Service -ErrorAction SilentlyContinue)
 $backup = $null
-if ($hadService -and (Test-Path (Join-Path $InstDir 'dpi-proxy.exe'))) {
+if ($hadService -and (Test-Path (Join-Path $InstDir $EngineName))) {
     $backup = Join-Path $env:ProgramData ('nivyx-install-backup-' + [guid]::NewGuid().ToString('N'))
     try {
         New-Item -ItemType Directory -Force -Path $backup | Out-Null
@@ -96,6 +117,9 @@ if ($hadService -and (Test-Path (Join-Path $InstDir 'dpi-proxy.exe'))) {
         exit 2
     }
 }
+# An old-named installation is left on disk until the new one works.
+$legacyService = [bool](Get-Service $OldService -ErrorAction SilentlyContinue)
+$legacy = $legacyService -or (Test-Path $OldInstDir) -or (Test-Path $OldDataDir)
 
 function Stop-WinDivertDriver {
     $wd = Get-Service WinDivert -ErrorAction SilentlyContinue
@@ -109,34 +133,62 @@ function Stop-WinDivertDriver {
     }
 }
 
-function Register-NivyxService {
+function Remove-ServiceIfPresent([string]$name) {
+    if (Get-Service $name -ErrorAction SilentlyContinue) {
+        Stop-Service $name -Force -ErrorAction SilentlyContinue
+        # (sc.exe reports on stdout; no stderr redirection under 'Stop')
+        & sc.exe delete $name | Out-Null
+        Start-Sleep -Seconds 1
+    }
+}
+
+function Register-EngineService([string]$name, [string]$exe, [string]$display) {
     # New-Service, not sc.exe: PowerShell would mangle the quoted path
-    New-Service -Name $Service -BinaryPathName "`"$(Join-Path $InstDir 'dpi-proxy.exe')`" --service" `
-        -StartupType Automatic -DisplayName 'dpi-proxy (automatic DPI bypass)' `
-        -Description 'Redirects outgoing HTTPS and DNS to a local DPI-bypass proxy (WinDivert). Stopping it restores ordinary networking.' | Out-Null
-    & sc.exe failure $Service reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+    New-Service -Name $name -BinaryPathName "`"$exe`" --service" `
+        -StartupType Automatic -DisplayName $display `
+        -Description 'Redirects outgoing HTTPS and DNS to the local Nivyx DPI bypass (WinDivert). Stopping it restores ordinary networking.' | Out-Null
+    & sc.exe failure $name reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+}
+
+function Set-FirewallRule([string]$name, [string]$exe) {
+    # Redirected connections arrive at the service as inbound traffic;
+    # the service itself refuses anything it did not redirect.
+    Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    New-NetFirewallRule -Name $name -DisplayName 'Nivyx (redirected local traffic)' `
+        -Direction Inbound -Program $exe -Action Allow -Profile Any | Out-Null
+}
+
+function Set-MachinePath([string]$add, [string]$remove) {
+    $parts = @(([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';') | Where-Object { $_ -and $_ -ne $remove })
+    if ($add -and $parts -notcontains $add) { $parts += $add }
+    [Environment]::SetEnvironmentVariable('Path', ($parts -join ';'), 'Machine')
 }
 
 # engine: running, written by the process the service manager started
-function Wait-EngineRunning([int]$halfSeconds) {
+function Wait-EngineRunning([string]$name, [string]$status, [int]$halfSeconds) {
     foreach ($i in 1..$halfSeconds) {
         Start-Sleep -Milliseconds 500
-        $w = Get-CimInstance Win32_Service -Filter "Name='$Service'" -ErrorAction SilentlyContinue
-        if ($w -and $w.State -eq 'Running' -and $w.ProcessId -and (Test-Path $StatusFile) -and
-            (Select-String -Path $StatusFile -Pattern '^engine: running' -Quiet) -and
-            (Select-String -Path $StatusFile -Pattern "^pid: $($w.ProcessId)$" -Quiet)) { return $true }
+        $w = Get-CimInstance Win32_Service -Filter "Name='$name'" -ErrorAction SilentlyContinue
+        if ($w -and $w.State -eq 'Running' -and $w.ProcessId -and (Test-Path $status) -and
+            (Select-String -Path $status -Pattern '^engine: running' -Quiet) -and
+            (Select-String -Path $status -Pattern "^pid: $($w.ProcessId)$" -Quiet)) { return $true }
     }
     return $false
 }
 
+function Get-Sha256Of([string]$path) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $fs = [System.IO.File]::OpenRead($path)
+    try { return [BitConverter]::ToString($sha.ComputeHash($fs)) } finally { $fs.Dispose(); $sha.Dispose() }
+}
+
 $installed = $false
 try {
-    Log '[2/6] Stopping a previous installation (if any)...'
-    if (Get-Service $Service -ErrorAction SilentlyContinue) {
-        Stop-Service $Service -Force -ErrorAction SilentlyContinue
-        & sc.exe delete $Service | Out-Null
-        Start-Sleep -Seconds 1
-    }
+    Log '[2/6] Stopping the running version (if any)...'
+    Remove-ServiceIfPresent $Service
+    if ($legacyService) { Log "  moving over the older installation ($OldInstDir)" }
+    Remove-ServiceIfPresent $OldService
+    Get-NetFirewallRule -Name $OldService -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     # The WinDivert driver stays loaded after our service stops and keeps
     # WinDivert64.sys locked, which would make an upgrade fail halfway.
     # Unload it unless another WinDivert-based tool is using it.
@@ -147,43 +199,42 @@ try {
     # Files identical to what is already installed are not rewritten (the
     # unmodified WinDivert files never change between releases, and a copy
     # over a still-loaded driver would fail).
-    function Get-Sha256Of([string]$path) {
-        $sha = [System.Security.Cryptography.SHA256]::Create()
-        $fs = [System.IO.File]::OpenRead($path)
-        try { return [BitConverter]::ToString($sha.ComputeHash($fs)) } finally { $fs.Dispose(); $sha.Dispose() }
-    }
-    foreach ($f in $need) {
-        # (not $src/$dst: PowerShell names are case-insensitive and $Src is the script folder)
+    foreach ($f in $binaries) {
         $fromFile = Join-Path $from $f
         $toFile = Join-Path $InstDir $f
         if ((Test-Path $toFile) -and ((Get-Sha256Of $fromFile) -eq (Get-Sha256Of $toFile))) { continue }
         Copy-Item $fromFile $InstDir -Force
     }
-    foreach ($f in 'WinDivert-LICENSE.txt') {
+    foreach ($f in 'LICENSE.txt', 'WinDivert-LICENSE.txt') {
         if (Test-Path (Join-Path $from $f)) { Copy-Item (Join-Path $from $f) $InstDir -Force }
     }
-    foreach ($f in 'nivyx-impl.ps1', 'nivyx.cmd', 'uninstall.ps1', 'Uninstall Nivyx.cmd') {
-        $p = Join-Path $Src $f
-        if (-not (Test-Path $p)) { $p = Join-Path $from "scripts\windows\$f" }
+    foreach ($f in $scripts) {
+        $p = Find-Script $f
+        $to = Join-Path $InstDir $f
+        if ((Test-Path $to) -and (Get-Sha256Of $p) -eq (Get-Sha256Of $to)) { continue }
+        if ($f -eq 'nivyx.cmd' -and $FromUpdate -and (Test-Path $to)) {
+            # cmd.exe is reading the installed nivyx.cmd: swap it once
+            # `nivyx update` has exited
+            Copy-Item $p (Join-Path $InstDir 'nivyx.cmd.new') -Force
+            continue
+        }
         Copy-Item $p $InstDir -Force
     }
-    # optional PowerShell tab completion (package: nivyx-completion.ps1; source tree: scripts\completions\nivyx.ps1)
-    foreach ($c in (Join-Path $Src 'nivyx-completion.ps1'), (Join-Path $from 'scripts\completions\nivyx.ps1')) {
-        if (Test-Path $c) { Copy-Item $c (Join-Path $InstDir 'nivyx-completion.ps1') -Force; break }
-    }
-    # Upgrade from v2.1 or earlier: the old command wrappers lived in our
-    # own install folder; nothing outside it is touched.
-    foreach ($old in 'dpictl.cmd', 'dpi-proxy-ctl.cmd', 'dpictl-impl.ps1') {
-        $p = Join-Path $InstDir $old
-        if (Test-Path $p) { Remove-Item $p -Force; Log "  removed legacy command file $old (use: nivyx)" }
+    # settings and learned state of an older installation (never overwriting)
+    if (Test-Path $OldDataDir) {
+        foreach ($f in Get-ChildItem $OldDataDir -File) {
+            if ($f.Name -match '\.log$|^transparent\.status$') { continue }
+            $to = Join-Path $DataDir $f.Name
+            if (-not (Test-Path $to)) { Copy-Item $f.FullName $to }
+        }
     }
     $conf = Join-Path $DataDir 'strategy.conf'
     if (-not (Test-Path $conf)) {
         @(
-            '# dpi-proxy manual rules. Transparent mode needs none: known-blocked'
-            '# hosts (Discord and a few others, built in) get the bypass straight'
-            '# away; any other host is tried directly first and learns a bypass only'
-            '# if it needs one. Stream strategies: pass | tlsrec | tlsrec-split'
+            '# Nivyx manual rules. None are needed: known-blocked hosts get the'
+            '# bypass straight away; any other host is tried directly first and'
+            '# learns a bypass only if it needs one.'
+            '# Stream strategies: pass | tlsrec | tlsrec-split'
             '#'
             '# [domains]'
             '# example.com = tlsrec'
@@ -192,24 +243,17 @@ try {
     }
 
     Log '[4/6] Firewall rule and PATH...'
-    $exe = Join-Path $InstDir 'dpi-proxy.exe'
-    # Redirected connections arrive at the service as inbound traffic;
-    # the service itself refuses anything it did not redirect.
-    Get-NetFirewallRule -Name $Service -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-    New-NetFirewallRule -Name $Service -DisplayName 'dpi-proxy (redirected local traffic)' `
-        -Direction Inbound -Program $exe -Action Allow -Profile Any | Out-Null
-    $path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-    if (($path -split ';') -notcontains $InstDir) {
-        [Environment]::SetEnvironmentVariable('Path', "$path;$InstDir", 'Machine')
-    }
+    $exe = Join-Path $InstDir $EngineName
+    Set-FirewallRule $Service $exe
+    Set-MachinePath $InstDir $OldInstDir
 
     Log '[5/6] Creating and starting the service...'
-    Register-NivyxService
+    Register-EngineService $Service $exe 'Nivyx (automatic DPI bypass)'
     Remove-Item $StatusFile -ErrorAction SilentlyContinue
     Start-Service $Service
 
     Log '[6/6] Checking health...'
-    $ok = Wait-EngineRunning 40
+    $ok = Wait-EngineRunning $Service $StatusFile 40
     if (-not $ok) { throw "the engine did not report running within 20 s (service: $((Get-Service $Service).Status))" }
     $enginePid = (Get-CimInstance Win32_Service -Filter "Name='$Service'").ProcessId
     Clear-DnsClientCache -ErrorAction SilentlyContinue
@@ -228,25 +272,24 @@ try {
 }
 catch {
     Fail "$_"
-    $log = Join-Path $DataDir 'dpi-proxy.log'
+    $log = Join-Path $DataDir 'nivyx.log'
     if (Test-Path $log) {
         Write-Host "[install] last lines of ${log}:"
         Get-Content $log -Tail 15 | ForEach-Object { Write-Host "    $_" }
     }
     Fail 'stopping and removing the service (fail-open: networking returns to normal)'
-    Stop-Service $Service -Force -ErrorAction SilentlyContinue
-    & sc.exe delete $Service 2>$null | Out-Null
+    Remove-ServiceIfPresent $Service
+    Remove-Item (Join-Path $InstDir 'nivyx.cmd.new') -Force -ErrorAction SilentlyContinue
     if ($backup) {
         Fail 'putting the previous version back'
         $restored = $false
         try {
-            Start-Sleep -Seconds 1
             Stop-WinDivertDriver
             Copy-Item (Join-Path $backup '*') $InstDir -Recurse -Force -ErrorAction Stop
-            Register-NivyxService
+            Register-EngineService $Service (Join-Path $InstDir $EngineName) 'Nivyx (automatic DPI bypass)'
             Remove-Item $StatusFile -ErrorAction SilentlyContinue
             Start-Service $Service
-            $restored = Wait-EngineRunning 40
+            $restored = Wait-EngineRunning $Service $StatusFile 40
         } catch { Fail "restoring failed: $($_.Exception.Message)" }
         if ($restored) {
             Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
@@ -256,10 +299,40 @@ catch {
             Fail 'networking works normally (fail-open); run nivyx repair, or install a working version'
             exit 5
         }
+    } elseif ($legacyService -and (Test-Path $OldExe)) {
+        Fail "putting the previous version back ($OldInstDir)"
+        $restored = $false
+        try {
+            Get-NetFirewallRule -Name $Service -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+            Set-MachinePath $OldInstDir $InstDir
+            Remove-Item $InstDir -Recurse -Force -ErrorAction SilentlyContinue
+            Stop-WinDivertDriver
+            Set-FirewallRule $OldService $OldExe
+            Register-EngineService $OldService $OldExe 'dpi-proxy (automatic DPI bypass)'
+            $oldStatus = Join-Path $OldDataDir 'transparent.status'
+            Remove-Item $oldStatus -ErrorAction SilentlyContinue
+            Start-Service $OldService
+            $restored = Wait-EngineRunning $OldService $oldStatus 40
+        } catch { Fail "restoring failed: $($_.Exception.Message)" }
+        if ($restored) {
+            Fail 'the previous version is back and running; nothing else was changed'
+        } else {
+            Fail "could not start the previous version again; its files are still in $OldInstDir"
+            Fail 'networking works normally (fail-open); install a working version'
+            exit 5
+        }
     }
     exit 4
 }
 if ($backup) { Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue }
+if ($legacy) {
+    Remove-Item $OldInstDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $OldDataDir -Recurse -Force -ErrorAction SilentlyContinue
+    Log '  removed the older installation (settings and learned state were kept)'
+}
+if (Test-Path (Join-Path $InstDir 'nivyx.cmd.new')) {
+    Start-Process -WindowStyle Hidden cmd.exe "/c timeout /t 3 >nul & move /y `"$InstDir\nivyx.cmd.new`" `"$InstDir\nivyx.cmd`" >nul"
+}
 
 $other = Get-Process -Name goodbyedpi, winws -ErrorAction SilentlyContinue
 Write-Host ''
@@ -267,11 +340,10 @@ Log 'Done. Nivyx is running and starts automatically at boot.'
 Write-Host '  HTTPS and DNS from all applications now go through the automatic'
 Write-Host '  bypass; no browser/app proxy settings and no DNS changes are needed.'
 Write-Host ''
-Write-Host '  Status:     .\nivyx status      (in a new window: nivyx status)'
-Write-Host '  Doctor:     nivyx doctor'
-Write-Host '  Logs:       nivyx logs'
-Write-Host '  Stop:       nivyx stop          (networking keeps working, unbypassed)'
-Write-Host "  Uninstall:  powershell -ExecutionPolicy Bypass -File `"$InstDir\uninstall.ps1`""
+Write-Host '  Status:     nivyx status       (in a new terminal window)'
+Write-Host '  Problems:   nivyx doctor'
+Write-Host '  Update:     nivyx update'
+Write-Host "  Uninstall:  `"$InstDir\Uninstall Nivyx.cmd`""
 if ($other) {
     Write-Host ''
     Write-Host '  WARNING: another WinDivert-based DPI tool is running' -ForegroundColor Yellow

@@ -1,6 +1,6 @@
 # Architecture (Linux packet mode)
 
-This document is the technical design reference for `dpi-proxy-packet`,
+This document is the technical design reference for `nivyx-packet-engine`,
 the optional Linux packet-mode engine (NFQUEUE). The recommended
 Linux engine is transparent mode — see
 [docs/transparent-mode.md](transparent-mode.md). If you just want to run it,

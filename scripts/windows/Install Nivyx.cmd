@@ -1,20 +1,17 @@
 @echo off
 setlocal
-rem Nivyx: double-click installer for Windows.
-rem
-rem Elevates itself (a UAC prompt appears) and runs install.ps1 from
-rem this same folder, then keeps the window open so you can read the
-rem result. The exit code is install.ps1's own (0 = installed;
-rem 1 = not elevated, 2 = files missing, 4 = install/health check
-rem failed and was undone; 1223 = UAC prompt declined; 6 = Windows could
-rem not start the elevated installer for another reason, e.g. a policy;
-rem 3 = install.ps1 itself is missing). For manual or scripted installs, run install.ps1
-rem directly instead (see WINDOWS-QUICKSTART.txt).
+rem Nivyx: double-click installer for Windows (also upgrades an existing
+rem installation in place). Elevates itself (a UAC prompt appears), runs
+rem files\install.ps1 and keeps the window open so you can read the
+rem result. Exit code: install.ps1's own (0 installed, 2 files missing,
+rem 4 failed and undone, 5 failed and the previous version could not be
+rem restarted), 1223 = UAC prompt declined, 6 = Windows could not start
+rem it elevated for another reason (e.g. a policy), 3 = not extracted.
 
 rem Run straight from inside the ZIP, Explorer extracts only this file
 rem to a temporary folder: nothing else is next to it.
-if not exist "%~dp0install.ps1" (
-	echo Nivyx: install.ps1 was not found next to this file.
+if not exist "%~dp0files\install.ps1" (
+	echo Nivyx: the "files" folder was not found next to this file.
 	echo Extract the whole ZIP first ^(right click - Extract All^), then
 	echo double-click "Install Nivyx.cmd" in the extracted folder.
 	echo.
@@ -22,9 +19,7 @@ if not exist "%~dp0install.ps1" (
 	exit /b 3
 )
 
-rem "net session" only succeeds for an already-elevated process; it is
-rem the standard, dependency-free way to test for administrator rights
-rem from a batch file.
+rem "net session" only succeeds for an already-elevated process.
 net session >nul 2>&1
 if %errorlevel% == 0 goto :run
 
@@ -46,8 +41,6 @@ if "%RC%"=="1223" (
 	echo.
 	pause
 )
-rem 6: elevation itself failed for another reason (not a declined prompt),
-rem e.g. a policy that blocks it; the reason was printed above
 if "%RC%"=="6" (
 	echo.
 	echo Nivyx was NOT installed: Windows did not start it with administrator rights
@@ -60,7 +53,7 @@ exit /b %RC%
 :run
 cd /d "%~dp0"
 echo Installing Nivyx...
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\files\install.ps1"
 set RC=%errorlevel%
 echo.
 if "%RC%"=="0" (

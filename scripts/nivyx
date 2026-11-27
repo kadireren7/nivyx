@@ -92,15 +92,15 @@ TP_DECISIONS="${DPI_PROXY_TP_DECISIONS:-$(service_env "$TP_SERVICE" DPI_PROXY_TP
 STRATEGY_CONF="${DPI_PROXY_STRATEGY_CONF:-$(service_env "$TP_SERVICE" DPI_PROXY_STRATEGY_CONF /etc/$NAME_DIR/strategy.conf)}"
 
 # The system-service binary ($ENGINE_BIN, installed by
-# scripts/install.sh) takes priority over whatever "dpi-proxy" a user's
+# scripts/install.sh) takes priority over whatever engine a user's
 # PATH happens to resolve first (e.g. a plain SOCKS5-only dev build in
 # ~/.local/bin) — nivyx reports on the installed service, not on an
 # arbitrary same-named binary earlier in PATH.
 find_binary() {
 	if [ -x "$ENGINE_BIN" ]; then
 		echo "$ENGINE_BIN"
-	elif have dpi-proxy; then
-		command -v dpi-proxy
+	elif have nivyx-engine; then
+		command -v nivyx-engine
 	else
 		return 1
 	fi
@@ -109,8 +109,8 @@ find_binary() {
 find_packet_binary() {
 	if [ -x "$PACKET_BIN" ]; then
 		echo "$PACKET_BIN"
-	elif have dpi-proxy-packet; then
-		command -v dpi-proxy-packet
+	elif have nivyx-packet-engine; then
+		command -v nivyx-packet-engine
 	else
 		return 1
 	fi
@@ -133,7 +133,7 @@ status_field() {
 version_string() {
 	local bin
 	if bin="$(find_binary)"; then
-		"$bin" --version 2>/dev/null | sed -n 's/^dpi-proxy //p'
+		"$bin" --version 2>/dev/null | sed -n -e 's/^nivyx-engine //p' -e 's/^dpi-proxy //p'
 	fi
 }
 
@@ -410,7 +410,7 @@ tp_decision_block() {
 
 run_probe() {
 	local bin was_active=0 rc=0
-	bin="$(find_packet_binary)" || { err "dpi-proxy-packet not found (packet mode not installed)"; exit 1; }
+	bin="$(find_packet_binary)" || { err "nivyx-packet-engine not found (packet mode not installed)"; exit 1; }
 	# A probe starts its own scoped packet engine on the same table
 	# (inet dpi_proxy) and queue as the packet service: stop that
 	# service for the duration and start it again afterwards.
@@ -1017,20 +1017,6 @@ take_admin_lock() {
 	flock -n 9 || { err "another Nivyx install, update, repair or uninstall is running; try again when it has finished"; exit 1; }
 }
 
-# ---- release signature ---------------------------------------------------
-# The release manifest (nivyx-release.manifest) must carry a valid
-# signature (nivyx-release.manifest.sig) by one of these keys, name the
-# version being installed and list the download's SHA-256; checked by the
-# installed engine before anything downloaded is unpacked or run.
-# Enforced once this list holds a key. It is empty until the maintainer
-# sets up the offline signing key (docs/release-signing.md): until then
-# the SHA256SUMS check is the only one, as in earlier versions.
-# BEGIN RELEASE KEYS (from scripts/release-keys.txt by scripts/release-keys.sh sync)
-RELEASE_KEYS='
-'
-# END RELEASE KEYS
-MANIFEST_NAME=nivyx-release.manifest
-
 # The download URL of release asset $1 ("" if the release has none).
 asset_url() {
 	printf '%s' "$release_json" | grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*/'"${1//./\\.}"'"' \
@@ -1047,60 +1033,6 @@ check_download_url() {
 		err "NIVYX_RELEASE_API is for the test suite and must point at this machine (http://127.0.0.1:PORT/...); refusing $1"
 	fi
 	exit 1
-}
-
-# Called by update_cmd after the SHA256SUMS check (uses its asset, got,
-# current and the release's latest). Exits on any failure.
-verify_release_signature() {
-	local keys="$work/release-keys" man="$work/$MANIFEST_NAME" sig="$work/$MANIFEST_NAME.sig"
-	local man_url sig_url out mver mwant
-	if [ -n "${NIVYX_TEST_RELEASE_KEYS:-}" ]; then
-		# the test suite's temporary keys; only together with the
-		# loopback-only NIVYX_RELEASE_API (checked before this)
-		[ -n "${NIVYX_RELEASE_API:-}" ] || { err "NIVYX_TEST_RELEASE_KEYS is for the test suite (with NIVYX_RELEASE_API)"; exit 1; }
-		echo "note: using test release keys $NIVYX_TEST_RELEASE_KEYS" >&2
-		grep '^ed25519 ' "$NIVYX_TEST_RELEASE_KEYS" >"$keys" || true
-	else
-		printf '%s\n' "$RELEASE_KEYS" | grep '^ed25519 ' >"$keys" || true
-	fi
-	if [ ! -s "$keys" ]; then
-		echo "note: release signatures are not checked yet (no release key configured in this version)"
-		return 0
-	fi
-	man_url="$(asset_url "$MANIFEST_NAME")"; sig_url="$(asset_url "$MANIFEST_NAME.sig")"
-	if [ -z "$man_url" ] || [ -z "$sig_url" ]; then
-		err "release $latest is not signed (no $MANIFEST_NAME and/or $MANIFEST_NAME.sig); nothing was installed"
-		exit 1
-	fi
-	check_download_url "$man_url"; check_download_url "$sig_url"
-	curl -fsSL --max-time 60 --max-filesize 1048576 -o "$man" "$man_url" \
-		&& curl -fsSL --max-time 60 --max-filesize 65536 -o "$sig" "$sig_url" \
-		|| { err "could not download the release signature; nothing was installed"; exit 1; }
-	[ -x "$ENGINE_BIN" ] || { err "$ENGINE_BIN is missing: cannot check the release signature; nothing was installed"; exit 1; }
-	if ! out="$("$ENGINE_BIN" --verify-release "$keys" "$man" "$sig" 2>&1)"; then
-		err "the release signature is not valid: ${out:-no result}; nothing was installed"
-		exit 1
-	fi
-	if [ "$(sed -n 1p "$man")" != "nivyx-release-manifest 1" ] || [ "$(grep -c '^product nivyx$' "$man")" != 1 ] \
-		|| [ "$(grep -c '^version ' "$man")" != 1 ]; then
-		err "the signed manifest has an unknown format; nothing was installed"
-		exit 1
-	fi
-	mver="$(sed -n 's/^version \([0-9][0-9.]*\)$/\1/p' "$man")"
-	if [ "$mver" != "$latest" ]; then
-		err "the signed manifest is for version ${mver:-?}, the release claims $latest: refusing a substituted or replayed release; nothing was installed"
-		exit 1
-	fi
-	if ! ver_gt "$mver" "${current:-0}"; then
-		err "the signed release $mver is not newer than the installed ${current:-version}: refusing a downgrade; nothing was installed"
-		exit 1
-	fi
-	mwant="$(awk -v a="$asset" 'NF == 3 && $1 == "sha256" && $3 == a { print $2 }' "$man")"
-	if [ "$(printf '%s' "$mwant" | grep -c .)" != 1 ] || [ "$mwant" != "$got" ]; then
-		err "$asset does not match the signed manifest; nothing was installed"
-		exit 1
-	fi
-	echo "Release signature verified (${out#verified: })."
 }
 
 # True if $1 is strictly newer than $2 (plain x.y.z comparison).
@@ -1164,7 +1096,6 @@ update_cmd() {
 		exit 1
 	fi
 	echo "SHA-256 verified."
-	verify_release_signature
 
 	# only plain files and folders inside nivyx-linux-<arch>/: no links,
 	# no absolute or ".." paths
@@ -1181,84 +1112,27 @@ update_cmd() {
 	fi
 	tar --no-same-owner -xzf "$work/$asset" -C "$work" || { err "could not unpack the download"; exit 1; }
 	local pkg="$work/nivyx-linux-$arch"
-	[ -f "$pkg/dpi-proxy" ] && [ -x "$pkg/dpi-proxy" ] && [ -f "$pkg/nivyx" ] \
+	[ -f "$pkg/files/nivyx-engine" ] && [ -x "$pkg/files/nivyx-engine" ] && [ -f "$pkg/install.sh" ] && [ -f "$pkg/nivyx" ] \
 		|| { err "unexpected package layout; nothing was installed"; exit 1; }
-	if ! caps="$("$pkg/dpi-proxy" --capabilities 2>&1)" || ! grep -q '^transparent_mode: supported' <<<"$caps"; then
+	if ! caps="$("$pkg/files/nivyx-engine" --capabilities 2>&1)" || ! grep -q '^transparent_mode: supported' <<<"$caps"; then
 		err "the downloaded engine does not run here; nothing was installed"
 		err "  ($(head -n 1 <<<"$caps"))"
 		err "  the release package needs glibc 2.35+ and OpenSSL 3 (libssl.so.3); on other systems"
 		err "  (e.g. OpenSSL 4 on Fedora and Arch) update from source: git pull && sudo ./scripts/install.sh"
 		exit 1
 	fi
-	[ "$("$pkg/dpi-proxy" --version 2>/dev/null | sed -n 's/^dpi-proxy //p')" = "$latest" ] \
+	[ "$("$pkg/files/nivyx-engine" --version 2>/dev/null | sed -n 's/^nivyx-engine //p')" = "$latest" ] \
 		|| { err "the downloaded engine is not version $latest; nothing was installed"; exit 1; }
 
-	# Every file the update replaces is backed up first (unique names: a
-	# second update can never mix its files with this one's); the new
-	# engine and CLI are staged next to their targets so the swap is a
-	# rename.
-	local targets="$ENGINE_BIN /usr/local/bin/nivyx /usr/local/share/man/man1/nivyx.1
-/usr/share/bash-completion/completions/nivyx /usr/local/share/zsh/site-functions/_nivyx
-/usr/share/fish/vendor_completions.d/nivyx.fish" t new_eng new_cli
-	mkdir -p "/var/lib/$NAME_DIR"
-	bak="$(mktemp -d "/var/lib/$NAME_DIR/update-rollback.XXXXXX")"
-	: >"$bak/absent"
-	for t in $targets; do
-		if [ -e "$t" ]; then
-			mkdir -p "$bak/files$(dirname "$t")" && cp -p "$t" "$bak/files$t" \
-				|| { err "cannot back up $t (disk full?); nothing was installed"; rm -rf "$bak"; exit 1; }
-		else
-			printf '%s\n' "$t" >>"$bak/absent"
-		fi
-	done
-	# staged next to the targets, so the swap is a rename; a failure here
-	# (disk full, ...) leaves the installed files as they were
-	new_eng="$(mktemp /usr/local/bin/.nivyx-engine.XXXXXX)" && new_cli="$(mktemp /usr/local/bin/.nivyx.XXXXXX)" \
-		&& install -m 0755 "$pkg/dpi-proxy" "$new_eng" && install -m 0755 "$pkg/nivyx" "$new_cli" \
-		|| { err "cannot stage the new files (disk full?); nothing was installed"; rm -f "${new_eng:-}" "${new_cli:-}"; rm -rf "$bak"; exit 1; }
-	command -v strip >/dev/null 2>&1 && strip "$new_eng" 2>/dev/null || true
-	mv -f "$new_eng" "$ENGINE_BIN"
-	mv -f "$new_cli" /usr/local/bin/nivyx
-	# man page and completions (same places the installer uses)
-	if [ -f "$pkg/nivyx.1" ]; then
-		install -d /usr/local/share/man/man1 && install -m 0644 "$pkg/nivyx.1" /usr/local/share/man/man1/nivyx.1 || rc=1
-	fi
-	if [ -d "$pkg/completions" ]; then
-		install -D -m 0644 "$pkg/completions/nivyx.bash" /usr/share/bash-completion/completions/nivyx || rc=1
-		install -D -m 0644 "$pkg/completions/_nivyx" /usr/local/share/zsh/site-functions/_nivyx || rc=1
-		install -D -m 0644 "$pkg/completions/nivyx.fish" /usr/share/fish/vendor_completions.d/nivyx.fish || rc=1
-	fi
-	echo "Installed $latest; restarting the service ..."
-	[ "$rc" = 0 ] && { systemctl restart "$TP_SERVICE" || rc=1; }
-
-	if [ "$rc" = 0 ] && update_healthy; then
-		rm -rf "$bak"
-		# installs from before v2.3 move to the nivyx names; if that does
-		# not work out they stay exactly as they were (and keep running)
-		if [ "$LAYOUT" = old ]; then
-			migrate_layout || echo "note: the move to the new service names was not applied; Nivyx keeps running as before ($SELF repair retries it)"
-		fi
-		echo "Health check passed."
+	# The package's installer does the rest (backup, swap, health check,
+	# rollback, moving an install from before v2.3); it runs while this
+	# process holds the admin lock.
+	echo "Installing $latest ..."
+	if NIVYX_FROM_UPDATE=1 bash "$pkg/install.sh"; then
 		echo "Nivyx updated to $latest. Configuration and learned state were kept."
 		return 0
 	fi
-	err "the new version failed its health check; restoring ${current:-the previous version}"
-	for t in $targets; do
-		if [ -e "$bak/files$t" ]; then
-			cp -p "$bak/files$t" "$t.rollback" && mv -f "$t.rollback" "$t"
-		elif grep -qxF "$t" "$bak/absent"; then
-			rm -f "$t"
-		fi
-	done
-	systemctl reset-failed "$TP_SERVICE" 2>/dev/null || true
-	systemctl restart "$TP_SERVICE" || true
-	if update_healthy; then
-		rm -rf "$bak"
-		err "rolled back; Nivyx ${current:-previous} is running again"
-	else
-		err "rollback finished but the service is still unhealthy: sudo $SELF repair"
-		err "the previous files are kept in $bak"
-	fi
+	err "the update to $latest did not complete; see the messages above"
 	exit 1
 }
 
@@ -1462,12 +1336,12 @@ packet_cmd() {
 			systemctl status --no-pager "$PACKET_SERVICE" || true
 			echo
 		fi
-		bin="$(find_packet_binary)" || { err "dpi-proxy-packet not found"; exit 1; }
+		bin="$(find_packet_binary)" || { err "nivyx-packet-engine not found"; exit 1; }
 		"$bin" "${JSON_FLAG[@]}" --status
 		;;
 	strategy)
 		[ $# -ge 1 ] || { err "packet strategy needs a domain"; exit 1; }
-		bin="$(find_packet_binary)" || { err "dpi-proxy-packet not found"; exit 1; }
+		bin="$(find_packet_binary)" || { err "nivyx-packet-engine not found"; exit 1; }
 		exec "$bin" "${JSON_FLAG[@]}" --show-strategy "$1"
 		;;
 	logs)
@@ -1545,7 +1419,7 @@ reprobe)
 	run_probe --reprobe "$1"
 	;;
 networks)
-	bin="$(find_packet_binary)" || { err "dpi-proxy-packet not found"; exit 1; }
+	bin="$(find_packet_binary)" || { err "nivyx-packet-engine not found"; exit 1; }
 	exec "$bin" "${JSON_FLAG[@]}" --status
 	;;
 -h | --help | "")

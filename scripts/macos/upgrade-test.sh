@@ -2,26 +2,30 @@
 #
 # Upgrade regression test on a real Mac (CI: GitHub's macOS runners,
 # passwordless sudo): the real v2.1.0 package is installed, then the
-# candidate package is installed over it, exactly as a user would.
-# Uninstalls at the end.
+# candidate package is installed over it, exactly as a user would: the
+# old installation ("dpi-proxy" names, dpictl wrappers) is moved over to
+# the nivyx names with its settings. Uninstalls at the end.
 #
 #   ./upgrade-test.sh <old-package-dir> <new-package-dir>
 set -u
 
 OLD="$(cd "${1:?usage: upgrade-test.sh <old-package-dir> <new-package-dir>}" && pwd)"
 NEW="$(cd "${2:?usage: upgrade-test.sh <old-package-dir> <new-package-dir>}" && pwd)"
-LABEL="io.github.kadireren7.dpi-proxy"
-ANCHOR="com.apple/dpi-proxy"
-STATUS=/var/run/dpi-proxy/transparent.status
-CONF=/usr/local/etc/dpi-proxy/strategy.conf
-DECISIONS=/usr/local/var/dpi-proxy/tp-decisions.conf
+use_names() {
+	LABEL="io.github.kadireren7.$1"
+	STATUS="/var/run/$1/transparent.status"
+	CONF="/usr/local/etc/$1/strategy.conf"
+	DECISIONS="/usr/local/var/$1/tp-decisions.conf"
+	LOGF="/var/log/$1.log"
+}
+use_names dpi-proxy
 step=0
 
 stepn() { step=$((step + 1)); printf '\n=== [%d] %s\n' "$step" "$1"; }
 pass() { printf 'PASS: %s\n' "$1"; }
 die() {
 	printf 'FAIL: %s\n' "$1"
-	sudo tail -n 60 /var/log/dpi-proxy.log 2>/dev/null
+	sudo tail -n 60 "$LOGF" 2>/dev/null
 	cat "$STATUS" 2>/dev/null
 	exit 1
 }
@@ -62,7 +66,8 @@ sudo chmod 755 /usr/local/bin/dpictl
 pass "rule written, third-party dpictl planted ($decisions_before decisions on record)"
 
 stepn "upgrade: install the candidate package over it"
-( cd "$NEW" && sudo ./install.sh ) || die "candidate install.sh failed over v2.1.0"
+( cd "$NEW" && sudo sh ./files/install.sh ) || die "candidate install.sh failed over v2.1.0"
+use_names nivyx
 wait_running || die "service not running after the upgrade"
 
 stepn "after the upgrade"
@@ -76,7 +81,11 @@ sudo rm -f /usr/local/bin/dpictl
 [ "$(sudo shasum -a 256 "$CONF" | cut -d' ' -f1)" = "$conf_hash" ] || die "the manual config was modified by the upgrade"
 if [ "$decisions_before" -gt 0 ]; then [ -s "$DECISIONS" ] || die "learned decisions were lost"; fi
 nivyx strategy example.com | grep -q 'tlsrec (manual' || die "the manual rule no longer applies"
-pass "version $old_version -> $new_version; dpi-proxy-ctl gone; foreign dpictl untouched; config and state intact"
+for f in /Library/LaunchDaemons/io.github.kadireren7.dpi-proxy.plist /usr/local/bin/dpi-proxy \
+	/usr/local/etc/dpi-proxy /usr/local/var/dpi-proxy /var/run/dpi-proxy; do
+	[ -e "$f" ] && die "old $f is still there"
+done
+pass "version $old_version -> $new_version; old names and dpi-proxy-ctl gone; foreign dpictl untouched; config and state intact"
 
 stepn "DNS, HTTPS, bypass, restart, doctor, repair after the upgrade"
 sleep 11
@@ -93,8 +102,8 @@ sudo nivyx repair | grep -q 'nothing else wrong' || die "repair found something 
 pass "DNS over DoH, HTTPS, bypass rule, restart, doctor and repair all fine"
 
 stepn "uninstall removes everything of ours"
-( cd "$NEW" && sudo ./uninstall.sh --purge ) || die "uninstall.sh --purge failed"
-for f in /Library/LaunchDaemons/$LABEL.plist /usr/local/bin/dpi-proxy /usr/local/bin/nivyx /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl /usr/local/etc/dpi-proxy /usr/local/var/dpi-proxy /var/run/dpi-proxy; do
+( cd "$NEW" && sudo sh ./files/uninstall.sh --purge ) || die "uninstall.sh --purge failed"
+for f in /Library/LaunchDaemons/$LABEL.plist /usr/local/bin/nivyx-engine /usr/local/bin/nivyx /usr/local/bin/dpictl /usr/local/bin/dpi-proxy-ctl /usr/local/etc/nivyx /usr/local/var/nivyx /var/run/nivyx; do
 	[ -e "$f" ] && die "$f left behind"
 done
 launchctl print "system/$LABEL" >/dev/null 2>&1 && die "launchd job left"

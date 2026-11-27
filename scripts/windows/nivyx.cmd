@@ -28,9 +28,12 @@ for %%A in (%*) do (
 		set PSARGS=!PSARGS! "%%~A"
 	)
 )
+rem installed: nivyx-impl.ps1 is next to this file; in the package: in files\
+set "IMPL=%~dp0nivyx-impl.ps1"
+if not exist "%IMPL%" set "IMPL=%~dp0files\nivyx-impl.ps1"
 if "%HELP_REQUESTED%"=="1" (
-	powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0nivyx-impl.ps1" help
+	powershell -NoProfile -ExecutionPolicy Bypass -File "!IMPL!" help
 ) else (
-	powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0nivyx-impl.ps1" !PSARGS!
+	powershell -NoProfile -ExecutionPolicy Bypass -File "!IMPL!" !PSARGS!
 )
 exit /b %ERRORLEVEL%

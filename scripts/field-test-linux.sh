@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Field-test harness for dpi-proxy packet mode (Linux only).
+# Field-test harness for Nivyx packet mode (Linux only).
 #
 # Run this on the machine/network you actually want to validate
 # against — not in a container or CI runner without real
@@ -28,7 +28,7 @@ skip() { printf '[SKIP] %s\n' "$1"; }
 info() { printf '[info] %s\n' "$1"; }
 
 # Every kill/kill -0 against $ENGINE_PID below goes through `sudo`:
-# the engine runs as root (started via `sudo ... ./dpi-proxy-packet`),
+# the engine runs as root (started via `sudo ... ./nivyx-packet-engine`),
 # and a plain unprivileged `kill -TERM`/`kill -0` against a
 # root-owned PID fails with EPERM — silently, once stderr is
 # redirected, since that's indistinguishable here from "no such
@@ -51,7 +51,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "=== dpi-proxy field test (Linux packet mode) ==="
+echo "=== Nivyx field test (Linux packet mode) ==="
 echo
 
 # --- 1. required commands ---------------------------------------
@@ -112,7 +112,7 @@ else
 fi
 echo
 
-sudo ./dpi-proxy-packet --capabilities
+sudo ./nivyx-packet-engine --capabilities
 echo
 
 # --- 4. PASS test --------------------------------------------------
@@ -121,7 +121,7 @@ echo "default = pass" > /tmp/dpi-proxy-field-test-strategy.conf
 STRATEGY_CONF_TMP="/tmp/dpi-proxy-field-test-strategy.conf"
 
 sudo DPI_PROXY_STRATEGY_CONF="$STRATEGY_CONF_TMP" DPI_PROXY_LOG_LEVEL=info \
-	./dpi-proxy-packet > /tmp/dpi-proxy-field-test-pass.log 2>&1 &
+	./nivyx-packet-engine > /tmp/dpi-proxy-field-test-pass.log 2>&1 &
 ENGINE_PID=$!
 sleep 1
 
@@ -172,7 +172,7 @@ echo
 
 # --- 5. repeated start/stop ----------------------------------------
 echo "--- repeated start/stop ---"
-sudo DPI_PROXY_STRATEGY_CONF="$STRATEGY_CONF_TMP" ./dpi-proxy-packet \
+sudo DPI_PROXY_STRATEGY_CONF="$STRATEGY_CONF_TMP" ./nivyx-packet-engine \
 	> /tmp/dpi-proxy-field-test-restart.log 2>&1 &
 ENGINE_PID=$!
 sleep 1
@@ -215,7 +215,7 @@ if [ "$HAVE_TCPDUMP" = "1" ]; then
 fi
 
 sudo DPI_PROXY_STRATEGY_CONF="$STRATEGY_CONF_TMP" DPI_PROXY_LOG_LEVEL=debug \
-	./dpi-proxy-packet > /tmp/dpi-proxy-field-test-split.log 2>&1 &
+	./nivyx-packet-engine > /tmp/dpi-proxy-field-test-split.log 2>&1 &
 ENGINE_PID=$!
 sleep 1
 

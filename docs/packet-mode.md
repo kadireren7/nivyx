@@ -1,6 +1,6 @@
 # Packet mode (Linux) — reference
 
-This covers running `dpi-proxy-packet` manually, its strategy config
+This covers running `nivyx-packet-engine` manually, its strategy config
 format in detail, and how to test it yourself. For the recommended
 install path (systemd service via `scripts/install.sh`), see the main
 [README](../README.md) — this document is for manual/advanced use, and
@@ -21,20 +21,20 @@ mode ([docs/transparent-mode.md](transparent-mode.md)).
 ```sh
 sudo apt-get install -y libnetfilter-queue-dev nftables
 make packet-mode
-sudo ./dpi-proxy-packet --capabilities   # confirm real CAP_NET_ADMIN/CAP_NET_RAW
-DPI_PROXY_LOG_LEVEL=debug sudo ./dpi-proxy-packet
+sudo ./nivyx-packet-engine --capabilities   # confirm real CAP_NET_ADMIN/CAP_NET_RAW
+DPI_PROXY_LOG_LEVEL=debug sudo ./nivyx-packet-engine
 ```
 
 Least-privilege alternative to running the whole thing under `sudo`:
 
 ```sh
-sudo setcap cap_net_admin,cap_net_raw+eip ./dpi-proxy-packet
-getcap ./dpi-proxy-packet   # must print "cap_net_admin,cap_net_raw=eip" — if
+sudo setcap cap_net_admin,cap_net_raw+eip ./nivyx-packet-engine
+getcap ./nivyx-packet-engine   # must print "cap_net_admin,cap_net_raw=eip" — if
                             # it prints nothing, setcap silently didn't apply
                             # (e.g. filesystem mounted noexec/nosuid, or the
                             # calling shell itself lacks CAP_SETFCAP); fall
                             # back to running the whole thing under sudo
-./dpi-proxy-packet
+./nivyx-packet-engine
 ```
 
 (The installed systemd service takes a different, more thorough
@@ -153,7 +153,7 @@ degrades to the plain action it was layered onto instead.
 ## CLI reference
 
 ```
-dpi-proxy-packet [--config PATH] [--discovery-cache PATH]
+nivyx-packet-engine [--config PATH] [--discovery-cache PATH]
                   [--log-level error|warn|info|debug]
                   [--probe DOMAIN] [--reprobe DOMAIN]
                   [--show-strategy DOMAIN] [--status] [--json]
@@ -183,7 +183,7 @@ capabilities.
 
 In one terminal:
 ```sh
-DPI_PROXY_DEBUG=1 sudo ./dpi-proxy-packet
+DPI_PROXY_DEBUG=1 sudo ./nivyx-packet-engine
 ```
 In another:
 ```sh
@@ -202,7 +202,7 @@ longer shows `inet dpi_proxy`.
 
 ```sh
 echo -e "default = pass\n\n[domains]\nexample.com = split" > strategy.conf
-DPI_PROXY_DEBUG=1 sudo ./dpi-proxy-packet &
+DPI_PROXY_DEBUG=1 sudo ./nivyx-packet-engine &
 sudo tcpdump -i any -w split.pcap 'tcp port 443 and host example.com'
 # in another terminal:
 curl -4 -I https://example.com

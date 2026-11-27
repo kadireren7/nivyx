@@ -4,14 +4,17 @@
 # after this, HTTPS from every application goes through the automatic
 # DPI bypass with no proxy settings anywhere. Needs root (sudo).
 #
+# From the release package (prebuilt engine, nothing is compiled):
+#   sudo ./install.sh                    install or upgrade (idempotent)
+# From the source repository (builds the engine first):
 #   sudo ./scripts/install.sh            install or upgrade (idempotent)
 #   sudo ./scripts/install.sh --packet   also install packet mode
-#                                        (dpi-proxy-packet; needs
+#                                        (nivyx-packet-engine; needs
 #                                        libnetfilter-queue-dev), not
 #                                        started automatically
 #
-# On Debian/Ubuntu, missing build and runtime dependencies (compiler,
-# make, nftables, OpenSSL + headers, pkg-config, curl) are installed
+# On Debian/Ubuntu, missing dependencies (nftables; for a source build
+# also compiler, make, OpenSSL headers, pkg-config, curl) are installed
 # with apt-get automatically. On other systemd + nftables distributions
 # (Arch, Fedora, openSUSE, ...) the installer works as long as the
 # dependencies are present; if something is missing it lists it and stops.
@@ -24,7 +27,21 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+# release package: this script at the top, the engine and unit in files/
+if [ -f "$SCRIPT_DIR/files/nivyx-engine" ]; then
+	PREBUILT=1
+	ENGINE_SRC="$SCRIPT_DIR/files/nivyx-engine"
+	CLI_SRC="$SCRIPT_DIR/nivyx"
+	UNIT_SRC="$SCRIPT_DIR/files"
+	UNINSTALL_HINT="sudo ./uninstall.sh   (in the Nivyx folder)"
+else
+	PREBUILT=0
+	PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+	ENGINE_SRC="$PROJECT_ROOT/nivyx-engine"
+	CLI_SRC="$PROJECT_ROOT/scripts/nivyx"
+	UNIT_SRC="$PROJECT_ROOT/systemd"
+	UNINSTALL_HINT="sudo ./scripts/uninstall.sh"
+fi
 
 TP_SERVICE="nivyx"
 PACKET_SERVICE="nivyx-packet"
@@ -43,9 +60,11 @@ OLD_PACKET_SERVICE="dpi-proxy-packet"
 WITH_PACKET=0
 for arg in "$@"; do
 	case "$arg" in
-	--packet) WITH_PACKET=1 ;;
+	--packet)
+		[ "$PREBUILT" = 0 ] || { printf '[install] --packet needs the source repository (it is built there)\n' >&2; exit 1; }
+		WITH_PACKET=1 ;;
 	-h | --help)
-		sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
 		;;
 	*)
@@ -164,8 +183,9 @@ run_as_build_user() {
 	fi
 }
 
-# one install/update/repair/uninstall at a time (same lock as nivyx)
-if command -v flock >/dev/null 2>&1; then
+# one install/update/repair/uninstall at a time (same lock as nivyx;
+# `nivyx update` runs this installer while holding it)
+if [ "${NIVYX_FROM_UPDATE:-}" != 1 ] && command -v flock >/dev/null 2>&1; then
 	exec 9>/run/nivyx-admin.lock
 	flock -n 9 || { err "another Nivyx install, update, repair or uninstall is running; try again when it has finished"; exit 1; }
 fi
@@ -198,17 +218,24 @@ want() { # package description
 	case " $need_pkgs " in *" $1 "*) ;; *) need_pkgs="$need_pkgs $1" ;; esac
 	need_desc="$need_desc $2"
 }
-{ have cc && have make; } || want build-essential "cc/make"
-have nft || want nftables "nft"
-have openssl || want openssl "openssl"
-# curl and pkg-config were never hard requirements (the health check falls
-# back to openssl; headers are also found by path), so they are only
-# installed on Debian-family systems, where it costs nothing.
-if is_debian_family; then
-	have curl || want curl "curl"
-	have pkg-config || want pkg-config "pkg-config"
+if [ "$PREBUILT" = 0 ]; then
+	{ have cc && have make; } || want build-essential "cc/make"
+	have nft || want nftables "nft"
+	have openssl || want openssl "openssl"
+	# curl and pkg-config were never hard requirements (the health check falls
+	# back to openssl; headers are also found by path), so they are only
+	# installed on Debian-family systems, where it costs nothing.
+	if is_debian_family; then
+		have curl || want curl "curl"
+		have pkg-config || want pkg-config "pkg-config"
+	fi
+	have_openssl_headers || want libssl-dev "openssl-headers"
+else
+	have nft || want nftables "nft"
+	if is_debian_family; then
+		have curl || have openssl || want curl "curl"
+	fi
 fi
-have_openssl_headers || want libssl-dev "openssl-headers"
 if [ "$WITH_PACKET" = 1 ] && ! pkg-config --exists libnetfilter_queue 2>/dev/null; then
 	want libnetfilter-queue-dev "libnetfilter-queue"
 fi
@@ -242,15 +269,19 @@ if [ -n "$need_pkgs" ]; then
 		fi
 		rm -f "$aptlog"
 		# verify the install really provided what was missing
-		for tool in cc make nft openssl; do
-			have "$tool" || { err "$tool is still missing after installing packages"; exit 2; }
-		done
-		have_openssl_headers || { err "OpenSSL headers are still missing after installing libssl-dev"; exit 2; }
+		have nft || { err "nft is still missing after installing packages"; exit 2; }
+		if [ "$PREBUILT" = 0 ]; then
+			for tool in cc make openssl; do
+				have "$tool" || { err "$tool is still missing after installing packages"; exit 2; }
+			done
+			have_openssl_headers || { err "OpenSSL headers are still missing after installing libssl-dev"; exit 2; }
+		fi
 	else
 		err "missing: $need_desc"
 		err "packages are installed automatically only on Debian/Ubuntu."
 		err "install the equivalents with your package manager, then re-run:"
-		err "  C compiler + make, nftables, openssl + OpenSSL development headers"
+		[ "$PREBUILT" = 1 ] && err "  nftables" \
+			|| err "  C compiler + make, nftables, openssl + OpenSSL development headers"
 		err "  (Arch: base-devel nftables openssl; Fedora: gcc make nftables openssl-devel;"
 		err "   openSUSE: gcc make nftables libopenssl-devel)"
 		[ "$WITH_PACKET" = 1 ] && err "  and libnetfilter_queue development files for --packet"
@@ -259,19 +290,31 @@ if [ -n "$need_pkgs" ]; then
 fi
 log "  OK"
 
-log "[2/7] Building (as user: $BUILD_USER)..."
-cd "$PROJECT_ROOT"
-if [ "$WITH_PACKET" = 1 ]; then
-	# packet-mode starts with `make clean`, so it goes first
-	run_as_build_user make packet-mode || { err "packet-mode build failed"; exit 3; }
+if [ "$PREBUILT" = 1 ]; then
+	log "[2/7] Checking the engine in this package..."
+	if ! caps="$("$ENGINE_SRC" --capabilities 2>&1)" || ! grep -q '^transparent_mode: supported' <<<"$caps"; then
+		err "the engine in this package does not run here: $(head -n 1 <<<"$caps")"
+		err "it needs glibc 2.35+ and OpenSSL 3 (libssl.so.3, x86_64). On other systems"
+		err "(e.g. OpenSSL 4 on Fedora and Arch) install from source:"
+		err "  git clone https://github.com/kadireren7/nivyx.git && cd nivyx && sudo ./scripts/install.sh"
+		exit 3
+	fi
+	log "  $("$ENGINE_SRC" --version)"
 else
-	# always from clean: objects from an older tree may predate header
-	# dependency tracking and would otherwise be linked stale
-	run_as_build_user make clean >/dev/null
+	log "[2/7] Building (as user: $BUILD_USER)..."
+	cd "$PROJECT_ROOT"
+	if [ "$WITH_PACKET" = 1 ]; then
+		# packet-mode starts with `make clean`, so it goes first
+		run_as_build_user make packet-mode || { err "packet-mode build failed"; exit 3; }
+	else
+		# always from clean: objects from an older tree may predate header
+		# dependency tracking and would otherwise be linked stale
+		run_as_build_user make clean >/dev/null
+	fi
+	run_as_build_user make all || { err "build failed — see output above"; exit 3; }
+	"$ENGINE_SRC" --capabilities | grep -q '^transparent_mode: supported' \
+		|| { err "built binary has no transparent mode"; exit 3; }
 fi
-run_as_build_user make all || { err "build failed — see output above"; exit 3; }
-"$PROJECT_ROOT/dpi-proxy" --capabilities | grep -q '^transparent_mode: supported' \
-	|| { err "built binary has no transparent mode"; exit 3; }
 
 # Upgrade from v2.1 or earlier: the old public command names are gone.
 # Remove ONLY our own leftovers - a regular file that is a Nivyx/dpi-proxy
@@ -344,20 +387,23 @@ if nft list table ip dpibypass >/dev/null 2>&1 \
 fi
 
 log "[4/7] Installing binaries to /usr/local/bin..."
-install -m 0755 "$PROJECT_ROOT/dpi-proxy" "$BIN_DEST"
-# Strip the installed copy only — the source tree's own dpi-proxy
-# keeps its symbols for local debugging (make re rebuilds it anyway).
+install -m 0755 "$ENGINE_SRC" "$BIN_DEST"
+# Strip the installed copy only — the source tree's own engine keeps its
+# symbols for local debugging (make re rebuilds it anyway).
 command -v strip >/dev/null 2>&1 && strip "$BIN_DEST" 2>/dev/null || true
-install -m 0755 "$PROJECT_ROOT/scripts/nivyx" "$NIVYX_DEST"
+install -m 0755 "$CLI_SRC" "$NIVYX_DEST"
 remove_legacy_cli
-# man page and shell completions (best effort; harmless if the shell is absent)
-install -d /usr/local/share/man/man1
-install -m 0644 "$PROJECT_ROOT/scripts/nivyx.1" /usr/local/share/man/man1/nivyx.1
-install -D -m 0644 "$PROJECT_ROOT/scripts/completions/nivyx.bash" /usr/share/bash-completion/completions/nivyx
-install -D -m 0644 "$PROJECT_ROOT/scripts/completions/_nivyx" /usr/local/share/zsh/site-functions/_nivyx
-install -D -m 0644 "$PROJECT_ROOT/scripts/completions/nivyx.fish" /usr/share/fish/vendor_completions.d/nivyx.fish
+if [ "$PREBUILT" = 0 ]; then
+	# man page and shell completions (source install only; best effort,
+	# harmless if the shell is absent)
+	install -d /usr/local/share/man/man1
+	install -m 0644 "$PROJECT_ROOT/scripts/nivyx.1" /usr/local/share/man/man1/nivyx.1
+	install -D -m 0644 "$PROJECT_ROOT/scripts/completions/nivyx.bash" /usr/share/bash-completion/completions/nivyx
+	install -D -m 0644 "$PROJECT_ROOT/scripts/completions/_nivyx" /usr/local/share/zsh/site-functions/_nivyx
+	install -D -m 0644 "$PROJECT_ROOT/scripts/completions/nivyx.fish" /usr/share/fish/vendor_completions.d/nivyx.fish
+fi
 if [ "$WITH_PACKET" = 1 ]; then
-	install -m 0755 "$PROJECT_ROOT/dpi-proxy-packet" "$PACKET_BIN_DEST"
+	install -m 0755 "$PROJECT_ROOT/nivyx-packet-engine" "$PACKET_BIN_DEST"
 fi
 
 log "[5/7] Config..."
@@ -366,11 +412,11 @@ if [ -f "$CONF_DEST" ]; then
 	log "  keeping existing $CONF_DEST"
 else
 	cat > "$CONF_DEST" <<'EOF'
-# dpi-proxy manual rules. Transparent mode needs none: known-blocked
-# hosts (Discord and a few others, built in) get the bypass straight
-# away; any other host is tried directly first and learns a bypass only
-# if it needs one. A rule here overrides that for exactly the named host
-# (and its subdomains). Stream strategies: pass | tlsrec | tlsrec-split
+# Nivyx manual rules. None are needed: known-blocked hosts get the
+# bypass straight away; any other host is tried directly first and
+# learns a bypass only if it needs one. A rule here overrides that for
+# exactly the named host (and its subdomains).
+# Stream strategies: pass | tlsrec | tlsrec-split
 #
 # [domains]
 # example.com = tlsrec
@@ -380,9 +426,9 @@ EOF
 fi
 
 log "[6/7] Installing systemd unit(s)..."
-install -m 0644 "$PROJECT_ROOT/systemd/$TP_SERVICE.service" "$UNIT_DIR/$TP_SERVICE.service"
+install -m 0644 "$UNIT_SRC/$TP_SERVICE.service" "$UNIT_DIR/$TP_SERVICE.service"
 if [ "$WITH_PACKET" = 1 ]; then
-	install -m 0644 "$PROJECT_ROOT/systemd/$PACKET_SERVICE.service" "$UNIT_DIR/$PACKET_SERVICE.service"
+	install -m 0644 "$UNIT_SRC/$PACKET_SERVICE.service" "$UNIT_DIR/$PACKET_SERVICE.service"
 fi
 systemctl daemon-reload
 systemctl enable "$TP_SERVICE" >/dev/null
@@ -451,9 +497,7 @@ if [ "$OTHER_ACTIVE" = 1 ]; then
 	echo "  two will interfere."
 fi
 echo
-echo "  Status:     nivyx status               (sudo for interception counters)"
-echo "  Doctor:     nivyx doctor                (health checks)"
-echo "  Logs:       nivyx logs"
-echo "  Stop:       sudo nivyx stop             (internet keeps working, unbypassed)"
-echo "  Uninstall:  sudo ./scripts/uninstall.sh"
-echo "  Config:     $CONF_DEST (optional manual rules)"
+echo "  Status:     nivyx status"
+echo "  Problems:   nivyx doctor"
+echo "  Update:     sudo nivyx update"
+echo "  Uninstall:  $UNINSTALL_HINT"

@@ -66,7 +66,7 @@ static int	write_temp_config(const char *domain,
 	char *path_out, size_t path_out_size)
 {
 	char	chain_desc[64];
-	char	tmpl[] = "/tmp/dpi-proxy-probe-XXXXXX";
+	char	tmpl[] = "/tmp/nivyx-probe-XXXXXX";
 	int		fd;
 	FILE	*f;
 
@@ -120,7 +120,7 @@ static pid_t	start_scoped_engine(const char *config_path)
 		}
 		setenv("DPI_PROXY_STRATEGY_CONF", config_path, 1);
 		setenv("DPI_PROXY_LOG_LEVEL", "error", 1);
-		execl("/proc/self/exe", "dpi-proxy-packet", (char *)NULL);
+		execl("/proc/self/exe", "nivyx-packet-engine", (char *)NULL);
 		_exit(127);
 	}
 	return (pid);

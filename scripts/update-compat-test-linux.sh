@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 #
-# An install made by an older release (service dpi-proxy-transparent) must
-# keep working through that release's own `nivyx update`, and then move to
-# the nivyx names without losing settings. CI: GitHub's ubuntu runner
-# (sudo, nftables, tags). It uninstalls at the end.
+# The release package on a machine with an older Nivyx (CI: GitHub's ubuntu
+# runner, sudo, nftables, tags). Uninstalls at the end.
+#   1. the old release (installed from its tag) is offered the package by
+#      its own `nivyx update` and refuses it, changing nothing (v2.4.1 has
+#      a new package layout);
+#   2. the package's own install.sh (prebuilt engine, nothing compiled)
+#      installs over it, keeping the manual rule, and works;
+#   3. the package's update.sh hands over to `nivyx update`;
+#   4. the package's uninstall.sh removes it.
 #
-#   ./scripts/update-compat-test-linux.sh [old-tag]     (default: v2.2.2)
+#   ./scripts/update-compat-test-linux.sh [old-tag]     (default: v2.4.0)
+#   NIVYX_TEST_PACKAGE=<tar.gz>: the exact archive a release would publish
 set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-OLD_TAG="${1:-v2.2.2}"
-OLD_CONF=/etc/dpi-proxy/strategy.conf
-CONF=/etc/nivyx/strategy.conf
+OLD_TAG="${1:-v2.4.0}"
 mock="$(mktemp -d)"; port=18766
 step=0
 
@@ -25,25 +29,25 @@ die() {
 fetch() { curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$1" 2>&1 || true; }
 ok() { [[ "$1" =~ ^[23][0-9][0-9]$ ]]; }
 active() { systemctl is-active --quiet "$1"; }
+conf_of() { if [ -e /etc/systemd/system/dpi-proxy-transparent.service ]; then echo /etc/dpi-proxy/strategy.conf; else echo /etc/nivyx/strategy.conf; fi; }
+svc_of() { if [ -e /etc/systemd/system/dpi-proxy-transparent.service ]; then echo dpi-proxy-transparent; else echo nivyx; fi; }
 
 old="$(mktemp -d)/old"
 git -C "$ROOT" worktree add --detach "$old" "$OLD_TAG" >/dev/null || die "cannot check out $OLD_TAG (fetch tags?)"
 httpd=""
 trap 'kill $httpd 2>/dev/null || true; git -C "$ROOT" worktree remove --force "$old" >/dev/null 2>&1 || true' EXIT
 
-# the package the current tree would publish, served as "the latest release"
-make -C "$ROOT" clean >/dev/null && make -C "$ROOT" >/dev/null || die "build failed"
 new_version="$(cat "$ROOT/VERSION")"
-tree_version="$new_version"
-# NIVYX_TEST_PACKAGE: the exact archive a release would publish (release
-# workflow) instead of one packaged here
+mkdir -p "$mock/out"
 if [ -n "${NIVYX_TEST_PACKAGE:-}" ]; then
-	mkdir -p "$mock/out" && cp "$NIVYX_TEST_PACKAGE" "$mock/out/nivyx-linux-x86_64.tar.gz"
-	tar -xzOf "$mock/out/nivyx-linux-x86_64.tar.gz" nivyx-linux-x86_64/dpi-proxy >"$mock/engine" && chmod +x "$mock/engine"
-	[ "$("$mock/engine" --version)" = "dpi-proxy $new_version" ] || die "$NIVYX_TEST_PACKAGE is not version $new_version"
+	cp "$NIVYX_TEST_PACKAGE" "$mock/out/nivyx-linux-x86_64.tar.gz"
 else
+	make -C "$ROOT" clean >/dev/null && make -C "$ROOT" >/dev/null || die "build failed"
 	"$ROOT/scripts/package-linux.sh" "$mock/out" >/dev/null
 fi
+tar -C "$mock" -xzf "$mock/out/nivyx-linux-x86_64.tar.gz"
+PKG="$mock/nivyx-linux-x86_64"
+[ "$("$PKG/files/nivyx-engine" --version)" = "nivyx-engine $new_version" ] || die "the package is not version $new_version"
 (cd "$mock/out" && sha256sum nivyx-linux-x86_64.tar.gz > SHA256SUMS)
 cat > "$mock/out/latest.json" <<JSON
 {"tag_name":"v$new_version","prerelease":false,"assets":[
@@ -56,110 +60,51 @@ t=0
 until curl -fsS --max-time 3 "http://127.0.0.1:$port/latest.json" >/dev/null 2>&1 || [ $t -ge 15 ]; do sleep 1; t=$((t + 1)); done
 export NIVYX_RELEASE_API="http://127.0.0.1:$port/latest.json"
 
-install_old() {
-	sudo "$old/scripts/install.sh" || die "$OLD_TAG install.sh failed"
-	active dpi-proxy-transparent || die "$OLD_TAG service not active"
-	printf '\n[domains]\nexample.com = tlsrec\n' | sudo tee -a "$OLD_CONF" >/dev/null
-	sudo systemctl restart dpi-proxy-transparent; sleep 3
-	conf_hash="$(sudo sha256sum "$OLD_CONF" | cut -d' ' -f1)"
-}
-old_cli_update() {
-	# the OLD release's own updater, installing the NEW package
-	sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" /usr/local/bin/nivyx update || die "the $OLD_TAG updater failed on the new package"
-	[ "$(nivyx version | awk '{print $2}')" = "$new_version" ] || die "version after the old updater: $(nivyx version)"
-	active dpi-proxy-transparent || die "old-layout service down after the old updater"
-	c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS after the old updater -> '$c'"
-	out="$(nivyx status)"; echo "$out" | grep -q '^Service: Running' || die "the new CLI does not see the old-layout service"
-}
-assert_migrated() {
-	active nivyx || die "nivyx service not active after the move"
-	systemctl list-unit-files | grep -q 'dpi-proxy-transparent' && die "old unit left behind"
-	[ -e /usr/local/bin/dpi-proxy ] && die "old engine path left behind"
-	[ -x /usr/local/bin/nivyx-engine ] || die "nivyx-engine missing"
-	[ -d /etc/dpi-proxy ] && die "/etc/dpi-proxy left behind"
-	[ "$(sudo sha256sum "$CONF" | cut -d' ' -f1)" = "$conf_hash" ] || die "the manual config changed in the move"
-	systemctl is-enabled --quiet nivyx || die "nivyx is not enabled at boot"
-	out="$(nivyx strategy example.com)"; echo "$out" | grep -q 'tlsrec (manual' || die "the manual rule no longer applies"
-	c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS after the move -> '$c'"
-	nivyx doctor || die "doctor failed after the move"
-}
+stepn "$OLD_TAG installed from its tag, with a manual rule"
+sudo "$old/scripts/install.sh" >/dev/null || die "$OLD_TAG install.sh failed"
+svc="$(svc_of)"; conf="$(conf_of)"
+active "$svc" || die "$OLD_TAG service not active"
+printf '\n[domains]\nexample.com = tlsrec\n' | sudo tee -a "$conf" >/dev/null
+sudo systemctl restart "$svc"; sleep 3
+conf_hash="$(sudo sha256sum "$conf" | cut -d' ' -f1)"
+old_version="$(nivyx version | awk '{print $2}')"
+pass "$OLD_TAG installed ($old_version, service $svc)"
 
-# v2.3 and later already use the nivyx names: only the updater path is
-# checked (nothing to migrate)
-case "$OLD_TAG" in
-v2.[3-9]* | v[3-9]*)
-	stepn "$OLD_TAG installed, its own updater installs the new package"
-	sudo "$old/scripts/install.sh" || die "$OLD_TAG install.sh failed"
-	active nivyx || die "$OLD_TAG service not active"
-	printf '\n[domains]\nexample.com = tlsrec\n' | sudo tee -a "$CONF" >/dev/null
-	sudo systemctl restart nivyx; sleep 3
-	conf_hash="$(sudo sha256sum "$CONF" | cut -d' ' -f1)"
-	sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" /usr/local/bin/nivyx update || die "the $OLD_TAG updater failed on the new package"
-	[ "$(nivyx version | awk '{print $2}')" = "$new_version" ] || die "version after the old updater: $(nivyx version)"
-	active nivyx || die "service down after the old updater"
-	[ "$(sudo sha256sum "$CONF" | cut -d' ' -f1)" = "$conf_hash" ] || die "the manual config changed"
-	nivyx strategy example.com | grep -q 'tlsrec (manual' || die "the manual rule no longer applies"
-	c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS after the old updater -> '$c'"
-	nivyx doctor || die "doctor failed after the update"
-	out="$(sudo nivyx repair 2>&1)" || { echo "$out"; die "repair failed"; }
-	echo "$out" | grep -q 'nothing else wrong' || { echo "$out"; die "repair found something wrong after the update"; }
-	sudo "$ROOT/scripts/uninstall.sh" --purge
-	pass "$OLD_TAG updater -> $new_version: config, rule, HTTPS, doctor and repair fine"
-	printf '\nUPDATE COMPAT %s -> %s: ALL CHECKS PASSED\n' "$OLD_TAG" "$tree_version"
-	exit 0 ;;
-esac
+stepn "the $OLD_TAG updater (as released) refuses the $new_version package and changes nothing"
+before="$(sha256sum /usr/local/bin/nivyx | cut -d' ' -f1) $(systemctl show -p MainPID --value "$svc")"
+rc=0; out="$(sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" /usr/local/bin/nivyx update 2>&1)" || rc=$?
+echo "$out"
+[ "$rc" != 0 ] || die "the $OLD_TAG updater reported success on the new layout"
+grep -q 'nothing was installed' <<<"$out" || die "the $OLD_TAG updater did not say that nothing was installed"
+[ "$before" = "$(sha256sum /usr/local/bin/nivyx | cut -d' ' -f1) $(systemctl show -p MainPID --value "$svc")" ] \
+	|| die "the CLI or the service process changed"
+[ "$(nivyx version | awk '{print $2}')" = "$old_version" ] || die "the installed version changed"
+c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS after the refused update -> '$c'"
+pass "refused; nothing changed (HTTPS $c)"
 
-stepn "$OLD_TAG installed, its own updater installs the new package"
-install_old
-old_cli_update
-pass "old updater OK; old names keep running with the new CLI and engine"
+stepn "the package's install.sh (prebuilt, nothing compiled) installs over $OLD_TAG"
+sudo "$PKG/install.sh" || die "the package's install.sh failed over $OLD_TAG"
+active nivyx || die "nivyx not active"
+[ "$(nivyx version | awk '{print $2}')" = "$new_version" ] || die "version after install: $(nivyx version)"
+systemctl list-unit-files | grep -q 'dpi-proxy-transparent' && die "old unit left behind"
+[ -e /usr/local/bin/dpi-proxy ] && die "old engine path left behind"
+[ "$(sudo sha256sum /etc/nivyx/strategy.conf | cut -d' ' -f1)" = "$conf_hash" ] || die "the manual config changed"
+nivyx strategy example.com | grep -q 'tlsrec (manual' || die "the manual rule no longer applies"
+c="$(fetch https://example.com/)"; ok "$c" || die "HTTPS after install -> '$c'"
+nivyx doctor || die "doctor failed"
+pass "$old_version -> $new_version from the package; config and rule kept; HTTPS $c"
 
-stepn "sudo nivyx repair moves the install to the nivyx names"
-sudo nivyx repair || die "repair failed"
-assert_migrated
-pass "moved by repair, settings intact"
-sudo "$ROOT/scripts/uninstall.sh" --purge
+stepn "the package's update.sh hands over to nivyx update"
+out="$(sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" "$PKG/update.sh" 2>&1)" || { echo "$out"; die "update.sh failed"; }
+echo "$out"
+grep -q 'up to date' <<<"$out" || die "update.sh did not run nivyx update"
+pass "update.sh -> nivyx update (up to date)"
 
-stepn "the new CLI's update moves it as part of updating"
-install_old
-old_cli_update
-# a newer release than the one installed now
-make -C "$ROOT" clean >/dev/null && make -C "$ROOT" VERSION=99.0.0 >/dev/null || die "99.0.0 build failed"
-"$ROOT/scripts/package-linux.sh" "$mock/out" >/dev/null
-(cd "$mock/out" && sha256sum nivyx-linux-x86_64.tar.gz > SHA256SUMS)
-sed -i "s/\"v$new_version\"/\"v99.0.0\"/;s/v$new_version/v99.0.0/" "$mock/out/latest.json"
-sudo env NIVYX_RELEASE_API="$NIVYX_RELEASE_API" nivyx update || die "the new CLI's update failed"
-[ "$(nivyx version | awk '{print $2}')" = 99.0.0 ] || die "version after update: $(nivyx version)"
-assert_migrated
-pass "update installed 99.0.0 and moved the install to the nivyx names"
-
-stepn "rollback: the renamed service cannot start -> the old layout is restored"
-sudo "$ROOT/scripts/uninstall.sh" --purge
-new_version=99.0.0	# the mock release now serves the 99.0.0 package
-install_old
-old_cli_update
-# a drop-in makes the NEW unit fail to start (systemd applies it once the unit exists)
-sudo mkdir -p /etc/systemd/system/nivyx.service.d
-printf '[Service]\nExecStart=\nExecStart=/bin/false\n' | sudo tee /etc/systemd/system/nivyx.service.d/fail.conf >/dev/null
-sudo systemctl daemon-reload
-out="$(sudo nivyx repair 2>&1)" && echo "$out" || echo "$out"
-sudo rm -rf /etc/systemd/system/nivyx.service.d
-sudo systemctl daemon-reload
-active dpi-proxy-transparent || die "rollback: the old service is not running"
-active nivyx && die "rollback: both old and new services are active"
-[ -e /etc/systemd/system/nivyx.service ] && die "rollback: the new unit was left behind"
-[ -e /usr/local/bin/nivyx-engine ] && die "rollback: the staged new engine was left behind"
-[ -x /usr/local/bin/dpi-proxy ] || die "rollback: the old engine is gone"
-[ "$(sudo sha256sum "$OLD_CONF" | cut -d' ' -f1)" = "$conf_hash" ] || die "rollback: the manual config changed"
-c="$(fetch https://example.com/)"; ok "$c" || die "rollback: HTTPS -> '$c'"
-out="$(nivyx status)"; echo "$out" | grep -q '^Service: Running' || die "rollback: nivyx status not Running"
-pass "unhealthy new service: old layout restored, one service active, config intact, HTTPS fine"
-sudo "$ROOT/scripts/uninstall.sh" --purge
-
-stepn "uninstall"
-sudo "$ROOT/scripts/uninstall.sh" --purge
+stepn "the package's uninstall.sh"
+sudo "$PKG/uninstall.sh" --purge
 systemctl list-unit-files | grep -qE '^(nivyx|dpi-proxy-transparent)\.service' && die "unit still present"
 for f in /usr/local/bin/nivyx /usr/local/bin/nivyx-engine /usr/local/bin/dpi-proxy /etc/nivyx /etc/dpi-proxy /var/lib/nivyx /var/lib/dpi-proxy; do
 	[ -e "$f" ] && die "$f left behind"
 done
-printf '\nUPDATE COMPAT %s -> %s: ALL CHECKS PASSED\n' "$OLD_TAG" "$tree_version"
+c="$(fetch https://example.com/)"; ok "$c" || die "after uninstall -> '$c'"
+printf '\nLINUX PACKAGE OVER %s -> %s: ALL CHECKS PASSED\n' "$OLD_TAG" "$new_version"

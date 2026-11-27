@@ -1,8 +1,8 @@
 *.o
 *.d
-dpi-proxy
-dpi-proxy.exe
-dpi-proxy-packet
+nivyx-engine
+nivyx-engine.exe
+nivyx-packet-engine
 # unit test binaries (sources are tests/unit/test_*.c)
 tests/unit/test_*
 !tests/unit/test_*.c

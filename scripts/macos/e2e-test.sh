@@ -9,16 +9,16 @@
 #
 #   ./e2e-test.sh <package-dir>
 #
-# It uninstalls at the end: don't run it on a Mac whose dpi-proxy
+# It uninstalls at the end: don't run it on a Mac whose Nivyx
 # installation you want to keep.
 set -u
 
 PKG="$(cd "${1:?usage: e2e-test.sh <package-dir>}" && pwd)"
-LABEL="io.github.kadireren7.dpi-proxy"
-ANCHOR="com.apple/dpi-proxy"
-STATUS=/var/run/dpi-proxy/transparent.status
-CONF=/usr/local/etc/dpi-proxy/strategy.conf
-LOG=/var/log/dpi-proxy.log
+LABEL="io.github.kadireren7.nivyx"
+ANCHOR="com.apple/nivyx"
+STATUS=/var/run/nivyx/transparent.status
+CONF=/usr/local/etc/nivyx/strategy.conf
+LOG=/var/log/nivyx.log
 step=0
 
 stepn() { step=$((step + 1)); printf '\n=== [%d] %s\n' "$step" "$1"; }
@@ -27,7 +27,7 @@ note() { printf 'NOTE: %s\n' "$1"; }
 die() {
 	printf 'FAIL: %s\n' "$1"
 	echo '--- log ---'; sudo tail -n 80 "$LOG" 2>/dev/null
-	echo '--- stderr log ---'; sudo tail -n 20 /var/log/dpi-proxy.stderr.log 2>/dev/null
+	echo '--- stderr log ---'; sudo tail -n 20 /var/log/nivyx.stderr.log 2>/dev/null
 	echo '--- status ---'; cat "$STATUS" 2>/dev/null
 	echo '--- anchor ---'; sudo pfctl -a "$ANCHOR" -s nat 2>/dev/null; sudo pfctl -a "$ANCHOR" -s rules 2>/dev/null
 	echo '--- pf info ---'; sudo pfctl -s info 2>/dev/null | head -n 3
@@ -68,12 +68,19 @@ pf_state() {
 	sudo pfctl -s info 2>/dev/null | sed -n 's/^Status: \([A-Za-z]*\).*/\1/p'
 	sudo pfctl -s rules 2>/dev/null
 	sudo pfctl -s nat 2>/dev/null
-	sudo pfctl -a com.apple -s Anchors 2>/dev/null | grep -v -x '  com.apple/dpi-proxy'
+	sudo pfctl -a com.apple -s Anchors 2>/dev/null | grep -v -x '  com.apple/nivyx'
 }
 anchor_empty() {
 	[ -z "$( { sudo pfctl -a "$ANCHOR" -s nat; sudo pfctl -a "$ANCHOR" -s rules;
 		sudo pfctl -a "$ANCHOR" -s Tables; } 2>/dev/null | grep -v -e '^No ALTQ' -e '^ALTQ')" ]
 }
+
+stepn "package layout: only the launchers, the quick start and files/ at the top"
+top="$(ls -1 "$PKG" | LC_ALL=C sort | tr '\n' '|')"
+want="$(printf '%s\n' "Install Nivyx.command" QUICKSTART.txt "Uninstall Nivyx.command" "Update Nivyx.command" files nivyx | LC_ALL=C sort | tr '\n' '|')"
+[ "$top" = "$want" ] \
+	|| die "unexpected top-level package contents: $top"
+pass "top level: $top"
 
 stepn "before: PF state and direct networking"
 sudo pfctl -s info 2>/dev/null | head -n 2
@@ -90,14 +97,14 @@ curl -sS -o /dev/null --max-time 60 -w 'direct download: %{size_download} bytes 
 pass "direct HTTPS $c"
 
 stepn "the generated PF anchor parses (pfctl -n, nothing loaded)"
-"$PKG/dpi-proxy" --print-pf-rules | sudo pfctl -a "$ANCHOR-ci-parse" -n -f - || die "pfctl rejects the ruleset"
+"$PKG/files/nivyx-engine" --print-pf-rules | sudo pfctl -a "$ANCHOR-ci-parse" -n -f - || die "pfctl rejects the ruleset"
 pass "pfctl accepts the ruleset"
 
-stepn "install (sudo ./install.sh from the package, as a user would)"
-( cd "$PKG" && sudo ./install.sh ) || die "install.sh failed"
+stepn "install (sudo sh files/install.sh from the package, as the launcher does)"
+( cd "$PKG" && sudo sh ./files/install.sh ) || die "install.sh failed"
 wait_running || die "service not running after install"
 [ -f "/Library/LaunchDaemons/$LABEL.plist" ] || die "plist missing"
-[ -x /usr/local/bin/dpi-proxy ] && [ -x /usr/local/bin/nivyx ] \
+[ -x /usr/local/bin/nivyx-engine ] && [ -x /usr/local/bin/nivyx ] \
 	|| die "binaries missing"
 command -v nivyx >/dev/null || die "nivyx is not on the PATH"
 pass "installed; launchd job running (pid $(daemon_pid)); installer health check passed"
@@ -112,13 +119,13 @@ p0="$(daemon_pid)"
 for what in repair uninstall install; do
 	case "$what" in
 	repair) out="$(sudo /usr/local/bin/nivyx repair 2>&1)"; rc=$? ;;
-	uninstall) out="$(cd "$PKG" && sudo ./uninstall.sh 2>&1)"; rc=$? ;;
-	install) out="$(cd "$PKG" && sudo ./install.sh 2>&1)"; rc=$? ;;
+	uninstall) out="$(cd "$PKG" && sudo sh ./files/uninstall.sh 2>&1)"; rc=$? ;;
+	install) out="$(cd "$PKG" && sudo sh ./files/install.sh 2>&1)"; rc=$? ;;
 	esac
 	[ "$rc" != 0 ] || { echo "$out"; die "$what ran while another operation held the lock"; }
 	echo "$out" | grep -q 'another Nivyx install, update, repair or uninstall is running' || { echo "$out"; die "$what: no lock message"; }
 done
-[ "$(daemon_pid)" = "$p0" ] && [ -f "/Library/LaunchDaemons/$LABEL.plist" ] && [ -x /usr/local/bin/dpi-proxy ] \
+[ "$(daemon_pid)" = "$p0" ] && [ -f "/Library/LaunchDaemons/$LABEL.plist" ] && [ -x /usr/local/bin/nivyx-engine ] \
 	|| die "a refused operation touched the install"
 kill "$holder"; wait "$holder" 2>/dev/null
 out="$(sudo /usr/local/bin/nivyx repair 2>&1)" || { echo "$out"; die "repair did not take over the lock of a finished holder"; }
@@ -133,9 +140,9 @@ n="$(anchor_rules)"
 [ "$n" -ge 4 ] || die "only $n rules in $ANCHOR"
 sudo pfctl -s rules 2>/dev/null >/tmp/dpi-e2e-main-rules.txt
 sudo pfctl -s nat 2>/dev/null >/tmp/dpi-e2e-main-nat.txt
-sed -n '2,$p' /tmp/dpi-e2e-pf-before.txt | grep -v -e 'dpi-proxy' >/tmp/dpi-e2e-a.txt
+sed -n '2,$p' /tmp/dpi-e2e-pf-before.txt | grep -v -e 'com.apple/nivyx' >/tmp/dpi-e2e-a.txt
 { cat /tmp/dpi-e2e-main-rules.txt /tmp/dpi-e2e-main-nat.txt; sudo pfctl -a com.apple -s Anchors 2>/dev/null; } \
-	| grep -v -e 'dpi-proxy' >/tmp/dpi-e2e-b.txt
+	| grep -v -e 'com.apple/nivyx' >/tmp/dpi-e2e-b.txt
 diff /tmp/dpi-e2e-a.txt /tmp/dpi-e2e-b.txt || die "the main ruleset or other anchors changed"
 wd="$(pgrep -f -- '--pf-watchdog' | head -n 1)"
 [ -n "$wd" ] || die "no watchdog process"
@@ -245,7 +252,7 @@ pass "example.com via tlsrec: HTTP $c; bypassed=$(field bypassed)"
 
 stepn "throughput and resource use"
 pid="$(daemon_pid)"
-curl -sS -o /dev/null --max-time 90 -w 'through dpi-proxy: %{size_download} bytes in %{time_total}s (%{speed_download} B/s)\n' \
+curl -sS -o /dev/null --max-time 90 -w 'through nivyx-engine: %{size_download} bytes in %{time_total}s (%{speed_download} B/s)\n' \
 	'https://speed.cloudflare.com/__down?bytes=50000000' || true
 for u in https://www.wikipedia.org/ https://github.com/ https://www.apple.com/ https://example.com/; do
 	for _ in 1 2 3; do fetch "$u" >/dev/null & done
@@ -339,7 +346,7 @@ sudo kill -9 "$old"
 sleep 0.5
 [ "$(anchor_rules)" -eq 0 ] || note "rules still present 0.5 s after the crash"
 c="$(fetch https://example.com/)"; ok "$c" || die "right after a crash -> '$c' (not fail-open)"
-sudo grep -q 'dpi-proxy exited unexpectedly: PF rules removed' "$LOG" || die "watchdog did not log the cleanup"
+sudo grep -q 'nivyx-engine exited unexpectedly: PF rules removed' "$LOG" || die "watchdog did not log the cleanup"
 i=0
 while [ $i -lt 40 ]; do
 	p="$(daemon_pid)"; [ -n "$p" ] && [ "$p" != "$old" ] && break
@@ -365,7 +372,7 @@ c="$(fetch https://example.com/)"; ok "$c" || die "after resume -> '$c'"
 pass "hung: rules removed after ${t}s, HTTPS $c meanwhile; resumed: reinstalled after ${t2}s"
 
 stepn "crash of daemon and watchdog together: launchd's restart cleans up"
-sudo pkill -9 -f '^/usr/local/bin/dpi-proxy'
+sudo pkill -9 -f '^/usr/local/bin/nivyx-engine'
 t=0
 note "rules right after killing both: $(anchor_rules) (stay until launchd restarts the daemon)"
 while [ $t -lt 30 ] && ! ok "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 https://example.com/ 2>/dev/null)"; do
@@ -421,14 +428,14 @@ mock="$(mktemp -d /tmp/nivyx-mock.XXXXXX)"; port=18765
 arch="$(uname -m)"
 current="$(nivyx version | awk '{print $2}')"
 # an engine that claims to be 9.9.9: the real one with the version string patched
-curver="$(/usr/local/bin/dpi-proxy --version | awk '{print $2}')"
-LC_ALL=C sed "s/$(printf '%s' "$curver" | sed 's/\./\\./g')/9.9.9/g" /usr/local/bin/dpi-proxy > "$mock/engine-good"
+curver="$(/usr/local/bin/nivyx-engine --version | awk '{print $2}')"
+LC_ALL=C sed "s/$(printf '%s' "$curver" | sed 's/\./\\./g')/9.9.9/g" /usr/local/bin/nivyx-engine > "$mock/engine-good"
 chmod +x "$mock/engine-good"; codesign --force -s - "$mock/engine-good" >/dev/null 2>&1
 "$mock/engine-good" --version | grep -q '9\.9\.9' || die "could not build the 9.9.9 test engine ($("$mock/engine-good" --version))"
 cat > "$mock/engine-broken" <<'BROKEN'
 #!/bin/sh
 case "$1" in
---version) echo "dpi-proxy 9.9.9" ;;
+--version) echo "nivyx-engine 9.9.9" ;;
 --capabilities) echo "transparent_mode: supported" ;;
 *) exit 1 ;;
 esac
@@ -436,9 +443,9 @@ BROKEN
 chmod +x "$mock/engine-broken"
 mk_release() {	# $1 engine, $2 good|bad checksum
 	rm -rf "$mock/pkg" "$mock/nivyx-macos-$arch.zip" "$mock/SHA256SUMS" "$mock/latest.json"
-	mkdir -p "$mock/pkg/nivyx-macos-$arch"
-	cp "$1" "$mock/pkg/nivyx-macos-$arch/dpi-proxy"
-	cp "$PKG/nivyx" "$mock/pkg/nivyx-macos-$arch/nivyx"
+	mkdir -p "$mock/pkg"
+	cp -R "$PKG" "$mock/pkg/nivyx-macos-$arch"
+	cp "$1" "$mock/pkg/nivyx-macos-$arch/files/nivyx-engine"
 	ditto -c -k --keepParent "$mock/pkg/nivyx-macos-$arch" "$mock/nivyx-macos-$arch.zip"
 	if [ "$2" = good ]; then
 		(cd "$mock" && shasum -a 256 "nivyx-macos-$arch.zip" > SHA256SUMS)
@@ -492,20 +499,20 @@ rm -rf "$mock"
 pass "check ok; bad checksum rejected; broken release rolled back; good release installed ($current -> 9.9.9), config kept"
 
 stepn "a reinstall that fails its health check puts the previous install back"
-eng0="$(shasum -a 256 /usr/local/bin/dpi-proxy | cut -d' ' -f1)"
+eng0="$(shasum -a 256 /usr/local/bin/nivyx-engine | cut -d' ' -f1)"
 plist0="$(shasum -a 256 "/Library/LaunchDaemons/$LABEL.plist" | cut -d' ' -f1)"
 conf0="$(shasum -a 256 "$CONF" | cut -d' ' -f1)"
 bad="$(mktemp -d)/pkg"
 cp -R "$PKG" "$bad"
 # a job that never starts the engine
-sed -i '' 's#<string>/usr/local/bin/dpi-proxy</string>#<string>/usr/bin/false</string>#' "$bad/$LABEL.plist"
-rc=0; out="$(cd "$bad" && sudo ./install.sh 2>&1)" || rc=$?
+sed -i '' 's#<string>/usr/local/bin/nivyx-engine</string>#<string>/usr/bin/false</string>#' "$bad/files/$LABEL.plist"
+rc=0; out="$(cd "$bad" && sudo sh ./files/install.sh 2>&1)" || rc=$?
 rm -rf "$(dirname "$bad")"
 [ "$rc" = 4 ] || { echo "$out"; die "install.sh with a broken job exited $rc (expected 4)"; }
 echo "$out" | grep -q 'previous installation is back and running' || { echo "$out"; die "no restore message"; }
 wait_running || die "the previous install is not running again"
 [ "$(shasum -a 256 "/Library/LaunchDaemons/$LABEL.plist" | cut -d' ' -f1)" = "$plist0" ] || die "the previous plist was not restored"
-[ "$(shasum -a 256 /usr/local/bin/dpi-proxy | cut -d' ' -f1)" = "$eng0" ] || die "the previous engine was not restored"
+[ "$(shasum -a 256 /usr/local/bin/nivyx-engine | cut -d' ' -f1)" = "$eng0" ] || die "the previous engine was not restored"
 [ "$(shasum -a 256 "$CONF" | cut -d' ' -f1)" = "$conf0" ] || die "the config changed"
 ls -d /private/var/tmp/nivyx-install-backup.* >/dev/null 2>&1 && die "a successful restore left its backup behind"
 c="$(fetch https://example.com/)"; ok "$c" || die "after the restore -> '$c'"
@@ -514,30 +521,30 @@ pass "exit 4; previous plist, engine and config restored; running; HTTPS $c"
 stepn "plain uninstall keeps settings, learned state and logs"
 printf '\n[domains]\ne2e-keep.example = tlsrec\n' | sudo tee -a "$CONF" >/dev/null
 conf1="$(shasum -a 256 "$CONF" | cut -d' ' -f1)"
-( cd "$PKG" && sudo ./uninstall.sh ) || die "uninstall.sh failed"
+( cd "$PKG" && sudo sh ./files/uninstall.sh ) || die "uninstall.sh failed"
 [ -e "/Library/LaunchDaemons/$LABEL.plist" ] && die "plist left"
 launchctl print "system/$LABEL" >/dev/null 2>&1 && die "launchd job left"
-[ -e /usr/local/bin/dpi-proxy ] && die "engine left"
+[ -e /usr/local/bin/nivyx-engine ] && die "engine left"
 anchor_empty || die "rules or tables left in $ANCHOR"
 [ "$(shasum -a 256 "$CONF" | cut -d' ' -f1)" = "$conf1" ] || die "plain uninstall removed or changed the config"
-[ -d /usr/local/var/dpi-proxy ] || die "plain uninstall removed the learned state"
+[ -d /usr/local/var/nivyx ] || die "plain uninstall removed the learned state"
 [ -e "$LOG" ] || die "plain uninstall removed the log"
 c="$(fetch https://example.com/)"; ok "$c" || die "after plain uninstall -> '$c'"
-( cd "$PKG" && sudo ./install.sh ) || die "reinstall over kept settings failed"
+( cd "$PKG" && sudo sh ./files/install.sh ) || die "reinstall over kept settings failed"
 [ "$(shasum -a 256 "$CONF" | cut -d' ' -f1)" = "$conf1" ] || die "reinstall changed the kept config"
 pass "config, state and log kept; no job, engine or PF rules; reinstall uses them; HTTPS $c"
 
 stepn "uninstall --purge leaves nothing behind"
-( cd "$PKG" && sudo ./uninstall.sh --purge ) || die "uninstall.sh --purge failed"
+( cd "$PKG" && sudo sh ./files/uninstall.sh --purge ) || die "uninstall.sh --purge failed"
 [ -e "/Library/LaunchDaemons/$LABEL.plist" ] && die "plist left"
 launchctl print "system/$LABEL" >/dev/null 2>&1 && die "launchd job left"
-for f in /usr/local/bin/dpi-proxy /usr/local/bin/nivyx /usr/local/etc/dpi-proxy \
-	/usr/local/var/dpi-proxy /var/run/dpi-proxy /var/log/dpi-proxy.log /var/log/dpi-proxy.stderr.log; do
+for f in /usr/local/bin/nivyx-engine /usr/local/bin/nivyx /usr/local/etc/nivyx \
+	/usr/local/var/nivyx /var/run/nivyx /var/log/nivyx.log /var/log/nivyx.stderr.log; do
 	[ -e "$f" ] && die "$f left"
 done
 # a new shell: this one still has the old location hashed
 /bin/sh -c 'command -v nivyx' >/dev/null && die "nivyx still on the PATH"
-pgrep -f '^/usr/local/bin/dpi-proxy' >/dev/null && die "a dpi-proxy process is left"
+pgrep -f '^/usr/local/bin/nivyx-engine' >/dev/null && die "a nivyx-engine process is left"
 anchor_empty || die "rules or tables left in $ANCHOR"
 sudo pfctl -s References 2>/dev/null | grep -q '[0-9]\{8,\}' && [ "$(sed -n 1p /tmp/dpi-e2e-pf-before.txt)" = Disabled ] \
 	&& die "a PF enable reference is still held"
@@ -548,10 +555,10 @@ c="$(fetch https://example.com/)"; ok "$c" || die "after uninstall -> '$c'"
 pass "no plist, job, binaries, config, state, logs, processes, PF rules, tables or PF reference; PF as before; HTTPS $c"
 
 stepn "clean reinstall"
-( cd "$PKG" && sudo ./install.sh ) || die "reinstall failed"
+( cd "$PKG" && sudo sh ./files/install.sh ) || die "reinstall failed"
 wait_running || die "not running after reinstall"
 c="$(fetch https://github.com/)"; ok "$c" || die "after reinstall -> '$c'"
-( cd "$PKG" && sudo ./uninstall.sh --purge ) || die "second uninstall failed"
+( cd "$PKG" && sudo sh ./files/uninstall.sh --purge ) || die "second uninstall failed"
 pf_state >/tmp/dpi-e2e-pf-after2.txt
 diff /tmp/dpi-e2e-pf-before.txt /tmp/dpi-e2e-pf-after2.txt || die "PF state differs after the second uninstall"
 pass "reinstalled (HTTPS $c) and uninstalled cleanly again"
